@@ -22,6 +22,10 @@ let lastLogsJson = '';
 let lastTopJson = '';
 let lastBannedJson = '';
 
+// UX state for flags scrolling (prevents auto-refresh jitter while reviewing long flagged content)
+let lastFlagsInteractionAt = 0;
+const FLAGS_INTERACTION_COOLDOWN_MS = 5000;
+
 // DOM Elements
 const passwordModal = document.getElementById('password-modal');
 const analyticsModal = document.getElementById('analytics-modal');
@@ -72,6 +76,19 @@ function init() {
     // Start UTC time update
     updateUtcTime();
     setInterval(updateUtcTime, 1000);
+    // Track interaction with the flags area so auto-refresh doesn't fight scrolling
+    const flagsContainer = document.getElementById('flags-container');
+    if (flagsContainer) {
+        const markFlagsInteraction = () => {
+            lastFlagsInteractionAt = Date.now();
+        };
+
+        flagsContainer.addEventListener('wheel', markFlagsInteraction, { passive: true });
+        flagsContainer.addEventListener('touchstart', markFlagsInteraction, { passive: true });
+        flagsContainer.addEventListener('pointerdown', markFlagsInteraction);
+        flagsContainer.addEventListener('keydown', markFlagsInteraction);
+        flagsContainer.addEventListener('scroll', markFlagsInteraction, { passive: true });
+    }
 }
 
 /**
@@ -1137,6 +1154,11 @@ async function loadFlags(silent = false) {
 
     if (!container || !section) return;
 
+    // Avoid re-rendering while admin is actively scrolling/reading flagged content
+    if (silent && (Date.now() - lastFlagsInteractionAt) < FLAGS_INTERACTION_COOLDOWN_MS) {
+        return;
+    }
+
     // Always show the flags section so admin can see it
     section.classList.remove('hidden');
 
@@ -1191,6 +1213,18 @@ function displayFlags(flags) {
 
     if (noFlagsMessage) noFlagsMessage.classList.add('hidden');
 
+    // Preserve per-card preview scroll positions to prevent scroll jumping on refresh
+    const previewScrollMap = new Map();
+    container.querySelectorAll('.flag-card[data-flag-id]').forEach((card) => {
+        const id = card.getAttribute('data-flag-id');
+        const preview = card.querySelector('.flag-content-preview');
+        if (id && preview) {
+            previewScrollMap.set(id, preview.scrollTop);
+        }
+    });
+
+    const previousWindowScrollY = window.scrollY;
+
     container.innerHTML = flags.map(flag => `
         <div class="flag-card ${flag.reviewed ? 'reviewed' : ''} severity-${flag.severity}" data-flag-id="${flag.id}">
             <div class="flag-card-header">
@@ -1238,6 +1272,20 @@ function displayFlags(flags) {
             `}
         </div>
     `).join('');
+
+    // Restore preview scroll position for unchanged flag cards
+    container.querySelectorAll('.flag-card[data-flag-id]').forEach((card) => {
+        const id = card.getAttribute('data-flag-id');
+        const preview = card.querySelector('.flag-content-preview');
+        if (id && preview && previewScrollMap.has(id)) {
+            preview.scrollTop = previewScrollMap.get(id);
+        }
+    });
+
+    // Keep viewport stable if a background refresh happened while scrolling
+    if (Math.abs(window.scrollY - previousWindowScrollY) > 2) {
+        requestAnimationFrame(() => window.scrollTo(0, previousWindowScrollY));
+    }
 }
 
 async function flagAction(flagId, action) {

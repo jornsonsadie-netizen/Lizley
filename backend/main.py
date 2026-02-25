@@ -652,17 +652,24 @@ async def check_content_moderation(
     # All content for the actual moderation API call
     combined_content = "\n".join([f"{msg.role}: {msg.content}" for msg in messages])
 
-    # Create a full conversation preview for the admin
-    # Including all messages ensures admins can see the context that actually triggered the flag
-    message_preview = "\n---\n".join([f"{msg.role.upper()}: {msg.content}" for msg in messages])
+    # Admin preview should show ONLY prompt content (user messages), not unrelated
+    # assistant/system history. We still moderate the full request above for accuracy,
+    # but the stored preview is focused on what the user actually prompted.
+    user_messages = [msg for msg in messages if (msg.role or '').lower() == 'user']
+    preview_messages = user_messages[-3:] if user_messages else messages[-1:]
+    message_preview = "\n---\n".join([
+        f"PROMPT {i + 1}: {msg.content}"
+        for i, msg in enumerate(preview_messages)
+        if (msg.content or '').strip()
+    ])
     
     # Fallback if preview is somehow empty
     if not message_preview.strip():
-        message_preview = f"(Flagged empty content or malformed messages: {len(messages)} msgs)"
+        message_preview = f"(Flagged empty prompt or malformed messages: {len(messages)} msgs)"
     
-    # Use a much larger truncation limit to show the full prompt
-    if len(message_preview) > 20000:
-        message_preview = message_preview[:20000] + "\n\n...(Conversation truncated for preview - very long prompt)..."
+    # Truncate preview to keep admin cards readable while still useful
+    if len(message_preview) > 6000:
+        message_preview = message_preview[:6000] + "\n\n...(Prompt preview truncated)..."
     
     try:
         # Call VoidAI Omni AI moderation endpoint (fresh call every time, no caching)
