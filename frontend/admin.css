@@ -33,6 +33,16 @@
     padding: var(--space-lg);
 }
 
+/* Disable homepage "breathing" animation on admin cards (causes slow up/down drift) */
+.admin-container .card {
+    animation: none;
+    transform: none;
+}
+
+.admin-container .card::before {
+    animation: none;
+}
+
 .section-header {
     display: flex;
     justify-content: space-between;

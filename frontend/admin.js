@@ -85,6 +85,7 @@ function init() {
 
         flagsContainer.addEventListener('wheel', markFlagsInteraction, { passive: true });
         flagsContainer.addEventListener('touchstart', markFlagsInteraction, { passive: true });
+        flagsContainer.addEventListener('touchmove', markFlagsInteraction, { passive: true });
         flagsContainer.addEventListener('pointerdown', markFlagsInteraction);
         flagsContainer.addEventListener('keydown', markFlagsInteraction);
         flagsContainer.addEventListener('scroll', markFlagsInteraction, { passive: true });
@@ -1280,6 +1281,18 @@ function displayFlags(flags) {
         if (id && preview && previewScrollMap.has(id)) {
             preview.scrollTop = previewScrollMap.get(id);
         }
+    });
+
+    // Mark interaction when scrolling inside per-flag drawers/previews.
+    // (scroll doesn't bubble, so container-level listeners won't catch this)
+    const markFlagsInteraction = () => {
+        lastFlagsInteractionAt = Date.now();
+    };
+    container.querySelectorAll('.flag-content-preview').forEach((preview) => {
+        preview.addEventListener('touchstart', markFlagsInteraction, { passive: true });
+        preview.addEventListener('touchmove', markFlagsInteraction, { passive: true });
+        preview.addEventListener('wheel', markFlagsInteraction, { passive: true });
+        preview.addEventListener('scroll', markFlagsInteraction, { passive: true });
     });
 
     // Keep viewport stable if a background refresh happened while scrolling
