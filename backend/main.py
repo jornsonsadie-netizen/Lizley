@@ -1136,7 +1136,7 @@ async def get_my_key(
         created_at=key_record.created_at.isoformat(),
         rpm_used=key_record.current_rpm,
         rpm_limit=RPM_LIMIT,
-        rpd_used=tokens_today,
+        rpd_used=key_record.current_rpd,
         rpd_limit=REQUESTS_PER_DAY_LIMIT,
     )
 
@@ -1199,9 +1199,9 @@ async def get_my_usage(
         rpm_used=current_rpm,
         rpm_limit=RPM_LIMIT,
         rpm_remaining=max(0, RPM_LIMIT - current_rpm),
-        rpd_used=tokens_today,
+        rpd_used=current_rpd,
         rpd_limit=REQUESTS_PER_DAY_LIMIT,
-        rpd_remaining=max(0, REQUESTS_PER_DAY_LIMIT - tokens_today),
+        rpd_remaining=max(0, REQUESTS_PER_DAY_LIMIT - current_rpd),
         total_tokens=usage_stats.total_tokens,
     )
 

@@ -645,10 +645,16 @@ class SQLiteDatabase(Database):
 
     async def get_daily_tokens_used(self, key_id: int, since_utc: str, until_utc: str) -> int:
         conn = await self._get_connection()
+        # SQLite request_time is "YYYY-MM-DD HH:MM:SS" (UTC)
+        # since_utc/until_utc is usually "YYYY-MM-DDTHH:MM:SS"
+        # Convert to space format for robust SQLite string comparison
+        since_str = since_utc.replace("T", " ") if "T" in since_utc else since_utc
+        until_str = until_utc.replace("T", " ") if "T" in until_utc else until_utc
+        
         cursor = await conn.execute("""
             SELECT COALESCE(SUM(tokens_used), 0) FROM usage_logs
             WHERE api_key_id = ? AND request_time >= ? AND request_time < ?
-        """, (key_id, since_utc, until_utc))
+        """, (key_id, since_str, until_str))
         row = await cursor.fetchone()
         return int(row[0]) if row and row[0] is not None else 0
 
