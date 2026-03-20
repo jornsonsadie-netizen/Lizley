@@ -1012,20 +1012,21 @@ class KeyGenerationRequest(BaseModel):
 )
 async def generate_key_endpoint(
     request: Request,
-    body: Optional[KeyGenerationRequest] = None,
+    gen_request: KeyGenerationRequest,
     client_ip: str = Depends(check_ip_ban),
 ) -> KeyGenerationResponse:
-    """Generate a new API key for the requesting IP address.
-    
-    Key lookup priority:
-    1. Same IP → return existing key
-    2. Same fingerprint, different IP → update IP and return existing key
-    3. New IP + new fingerprint → generate new key
+    """Generate or retrieve an API key for a user identified by hardware fingerprint.
     
     Returns:
         KeyGenerationResponse with the full key and prefix.
     """
-    fingerprint = body.fingerprint if body else None
+    fingerprint = gen_request.fingerprint
+    
+    # Proactively purge any disabled keys for this fingerprint/IP
+    # This ensures that "Your API key is disabled" errors are resolved by deletion
+    if fingerprint:
+        await db.delete_disabled_keys_by_fingerprint(fingerprint)
+    await db.delete_disabled_keys_by_ip(client_ip)
     
     # 1. Check if IP already has a key
     existing_key = await db.get_key_by_ip(client_ip)
@@ -1110,6 +1111,11 @@ async def get_my_key(
     Returns:
         KeyInfoResponse with key metadata and current usage.
     """
+    # 0. Proactively purge any disabled keys for this fingerprint/IP
+    if fingerprint:
+        await db.delete_disabled_keys_by_fingerprint(fingerprint)
+    await db.delete_disabled_keys_by_ip(client_ip)
+
     # PRIORITIZE FINGERPRINT: On shared cloud IPs (Zeabur), IP lookup is unreliable.
     key_record = None
     
