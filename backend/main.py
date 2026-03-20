@@ -68,7 +68,7 @@ if FRONTEND_DIR is None:
     FRONTEND_DIR = BACKEND_DIR.parent / "frontend"
 
 
-# ==================== Pydantic Models ====================
+# ==================== Pydantic Models ======================
 
 class KeyGenerationResponse(BaseModel):
     """Response model for key generation endpoint."""
@@ -139,6 +139,7 @@ class KeyInfoResponse(BaseModel):
     """Response model for key info endpoint."""
     key_prefix: str
     enabled: bool
+    full_key: Optional[str] = None
     discord_email: Optional[str] = None
     created_at: str
     rpm_used: int
@@ -855,11 +856,11 @@ async def lifespan(app: FastAPI):
     
     # Initialize database (auto-detects SQLite vs PostgreSQL)
     if settings and settings.database_url:
-        print(f"✓ Using PostgreSQL database")
+        print(f"* Using PostgreSQL database")
         db = create_database(database_url=settings.database_url)
     else:
         db_path = settings.database_path if settings else "./proxy.db"
-        print(f"✓ Using SQLite database: {db_path}")
+        print(f"* Using SQLite database: {db_path}")
         db = create_database(database_path=db_path)
     
     await db.initialize()
@@ -879,22 +880,22 @@ async def lifespan(app: FastAPI):
         ),
         http2=False,  # Use HTTP/1.1 for better compatibility
     )
-    print("✓ Initialized HTTP client (100 keepalive, 200 max connections)")
+    print("* Initialized HTTP client (100 keepalive, 200 max connections)")
     
     # Load existing data on startup
     keys = await db.get_all_keys()
-    print(f"✓ Loaded {len(keys)} API keys from database")
+    print(f"* Loaded {len(keys)} API keys from database")
     
     config = await db.get_config()
     if config:
-        print(f"✓ Loaded proxy config from database")
+        print(f"* Loaded proxy config from database")
     
     banned = await db.get_all_banned_ips()
-    print(f"✓ Loaded {len(banned)} banned IPs from database")
+    print(f"* Loaded {len(banned)} banned IPs from database")
     
     # Start periodic save task
     save_task = asyncio.create_task(periodic_save())
-    print("✓ Started periodic auto-save (every 5 minutes)")
+    print("* Started periodic auto-save (every 5 minutes)")
     
     yield
     
@@ -908,11 +909,11 @@ async def lifespan(app: FastAPI):
     
     if http_client:
         await http_client.aclose()
-        print("✓ HTTP client closed")
+        print("* HTTP client closed")
     
     if db:
         await db.close()
-        print("✓ Database connection closed")
+        print("* Database connection closed")
 
 
 app = FastAPI(
@@ -949,26 +950,22 @@ app.add_middleware(
 # ==================== Cache Control Middleware ====================
 
 class NoCacheMiddleware(BaseHTTPMiddleware):
-    """Middleware to add no-cache headers to admin API responses.
+    """Middleware to add no-cache headers to static files, admin routes, and root.
     
-    This prevents Cloudflare and browsers from caching admin API responses,
-    ensuring the dashboard always shows fresh data.
+    This ensures Cloudflare and browsers don't cache critical files during updates.
     """
-    
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
         
-        # Add no-cache headers to admin API endpoints
-        if request.url.path.startswith("/admin/") or request.url.path == "/admin":
+        path = request.url.path
+        if path.startswith("/static/") or path.startswith("/admin") or path == "/":
             response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
             response.headers["Pragma"] = "no-cache"
             response.headers["Expires"] = "0"
-        
+            
         return response
 
-
 app.add_middleware(NoCacheMiddleware)
-
 # ==================== Static File Serving ====================
 
 # Mount static files for CSS and JS (must be before route definitions)
@@ -1051,7 +1048,7 @@ async def generate_key_endpoint(
     
     # Store in database with fingerprint AND full key
     # For IP-based key generation (legacy), use IP as a pseudo discord_id
-    await db.create_api_key(
+    key_id = await db.create_api_key(
         discord_id=f"fp_{fingerprint}" if fingerprint else f"anon_{key_prefix}",
         discord_email=None,
         key_hash=key_hash,
@@ -1062,9 +1059,7 @@ async def generate_key_endpoint(
     
     # Update fingerprint if provided
     if fingerprint:
-        key_record = await db.get_key_by_ip(client_ip)
-        if key_record:
-            await db.update_key_fingerprint(key_record.id, fingerprint)
+        await db.update_key_fingerprint(key_id, fingerprint)
     
     return KeyGenerationResponse(
         key=new_key,
@@ -1115,6 +1110,7 @@ async def get_my_key(
     return KeyInfoResponse(
         key_prefix=key_record.key_prefix,
         enabled=key_record.enabled,
+        full_key=key_record.full_key,
         created_at=key_record.created_at.isoformat(),
         rpm_used=key_record.current_rpm,
         rpm_limit=RPM_LIMIT,

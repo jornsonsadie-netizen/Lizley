@@ -30,7 +30,7 @@ def main():
     try:
         settings = load_settings()
         port = settings.port
-        print(f"✓ Configuration loaded successfully")
+        print(f"* Configuration loaded successfully")
         print(f"  - Admin password: {'*' * len(settings.admin_password)}")
         print(f"  - Target API URL: {settings.target_api_url}")
         print(f"  - Max context: {settings.max_context}")

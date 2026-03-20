@@ -6,3 +6,10 @@
 local.env
 *.env
 screenshots/  
+proxy.db
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.vscode/
+.idea/
