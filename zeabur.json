@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.zeabur.app/template.json",
   "name": "Liz's Proxy",
-  "description": "OpenAI-compatible API proxy with IP-based key generation",
+  "description": "OpenAI-compatible API proxy with device fingerprinting key generation",
   "icon": "https://raw.githubusercontent.com/openai/openai-python/main/logo.png",
   "tags": ["python", "fastapi", "proxy", "openai"],
   "build": {
@@ -44,20 +44,8 @@
       "default": "2"
     },
     "SESSION_SECRET": {
-      "description": "Secret for signing session cookies (set so login survives restarts; generate with: python -c \"import secrets; print(secrets.token_hex(32))\"",
+      "description": "Secret for signing session cookies (auto-generated if not set)",
       "required": false
-    },
-    "DISCORD_CLIENT_ID": {
-      "description": "Discord OAuth2 Client ID (from https://discord.com/developers/applications)",
-      "required": true
-    },
-    "DISCORD_CLIENT_SECRET": {
-      "description": "Discord OAuth2 Client Secret",
-      "required": true
-    },
-    "OAUTH_REDIRECT_URI": {
-      "description": "Discord OAuth2 redirect URI (must match Discord Developer Portal)",
-      "default": "https://lizley.zeabur.app/auth/callback"
     }
   },
   "ports": [

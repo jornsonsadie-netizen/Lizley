@@ -1,6 +1,6 @@
 """Main FastAPI application for the AI Proxy.
 
-Provides API key generation via Discord OAuth, rate limiting, and request proxying.
+Provides API key generation via device fingerprinting, rate limiting, and request proxying.
 """
 
 import hashlib
@@ -21,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from pydantic import BaseModel
-from authlib.integrations.starlette_client import OAuth
+# authlib OAuth removed — Discord login is no longer used
 
 from backend.config import load_settings, Settings
 from backend.database import Database, ApiKeyRecord, create_database, ContentFlagRecord
@@ -33,31 +33,10 @@ from backend.session_secret import get_or_create_session_secret
 from dotenv import load_dotenv
 load_dotenv()
 
-# ==================== Discord OAuth Configuration ====================
-
-DISCORD_CLIENT_ID = os.getenv("DISCORD_CLIENT_ID", "")
-DISCORD_CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET", "")
-OAUTH_REDIRECT_URI = os.getenv("OAUTH_REDIRECT_URI", "https://lizley.zeabur.app/auth/callback")
 # Persistent session secret from DB (no .env required; survives restarts)
 SESSION_SECRET = get_or_create_session_secret(
     database_url=os.getenv("DATABASE_URL"),
     database_path=os.getenv("DATABASE_PATH", "./proxy.db"),
-)
-
-# Required Discord guild ID for signup (leave empty to allow all)
-REQUIRED_GUILD_ID = os.getenv("REQUIRED_GUILD_ID", "")
-
-# Initialize OAuth
-oauth = OAuth()
-oauth.register(
-    name='discord',
-    client_id=DISCORD_CLIENT_ID,
-    client_secret=DISCORD_CLIENT_SECRET,
-    authorize_url='https://discord.com/api/oauth2/authorize',
-    access_token_url='https://discord.com/api/oauth2/token',
-    api_base_url='https://discord.com/api/',
-    # Include 'guilds' scope to check guild membership
-    client_kwargs={'scope': 'identify guilds'},
 )
 
 
@@ -2503,17 +2482,7 @@ async def serve_index():
     )
 
 
-@app.get("/signup", include_in_schema=False)
-async def serve_signup():
-    """Serve the signup page where new users answer the RP question.
-    
-    Returns:
-        The signup.html file for the signup form.
-    """
-    signup_path = FRONTEND_DIR / "signup.html"
-    if signup_path.exists():
-        return FileResponse(str(signup_path), media_type="text/html")
-    raise HTTPException(status_code=404, detail="Signup page not found")
+# /signup route removed — application form is no longer used
 
 
 @app.get("/admin", include_in_schema=False)
