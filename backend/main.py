@@ -1110,17 +1110,30 @@ async def get_my_key(
     Returns:
         KeyInfoResponse with key metadata and current usage.
     """
-    # Try IP first, then fingerprint
-    key_record = await db.get_key_by_ip(client_ip)
-    if not key_record and fingerprint:
+    # PRIORITIZE FINGERPRINT: On shared cloud IPs (Zeabur), IP lookup is unreliable.
+    key_record = None
+    
+    if fingerprint:
         key_record = await db.get_key_by_fingerprint(fingerprint)
         if key_record:
-            # Update IP so future lookups work
-            await db.update_key_ip(key_record.id, client_ip)
+            # If IP changed but fingerprint matched, update IP for this key
+            if key_record.ip_address != client_ip:
+                print(f"[Auth] IP migration: Key {key_record.key_prefix} moved from {key_record.ip_address} to {client_ip} (Fingerprint match)")
+                await db.update_key_ip(key_record.id, client_ip)
+    
+    # Fallback to IP only if no fingerprint match
+    if not key_record:
+        key_record = await db.get_key_by_ip(client_ip)
+        if key_record and fingerprint and key_record.browser_fingerprint and key_record.browser_fingerprint != fingerprint:
+            # CRISIS: IP lookup found a key, but it belongs to a DIFFERENT fingerprint!
+            # This happens on shared proxy IPs. We MUST NOT return this key to the wrong user.
+            print(f"[Auth] Shared IP conflict: IP {client_ip} has key {key_record.key_prefix} (FP: {key_record.browser_fingerprint}) but requester has FP: {fingerprint}. ACCESS DENIED.")
+            key_record = None # Force 404/Generate view
+
     if not key_record:
         raise HTTPException(
             status_code=404,
-            detail="No API key found for your IP address"
+            detail="No API key found for your device. Please generate a new one."
         )
     
     # Tokens used today (UTC day) for display
