@@ -63,7 +63,8 @@ def load_settings(env_path: Optional[str] = None) -> Settings:
     max_context = int(os.getenv("MAX_CONTEXT", "128000").strip())
     max_output_tokens = int(os.getenv("MAX_OUTPUT_TOKENS", "4096").strip())
     max_output_tokens = max(1, min(max_output_tokens, 128000))  # Clamp 1–128000
-    database_path = os.getenv("DATABASE_PATH", "./proxy.db").strip()
+    default_db = "/tmp/proxy.db" if os.environ.get("ZEABUR") else "./proxy.db"
+    database_path = os.getenv("DATABASE_PATH", default_db).strip()
     
     # PostgreSQL URL (if set, will be used instead of SQLite)
     database_url = os.getenv("DATABASE_URL")

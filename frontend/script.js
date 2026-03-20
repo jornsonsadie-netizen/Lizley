@@ -42,30 +42,7 @@ async function init() {
     // Check URL params for OAuth callback data
     const urlParams = new URLSearchParams(window.location.search);
     
-    // Handle OAuth callback
-    if (urlParams.has('key')) {
-        // New key generated - show it!
-        const key = urlParams.get('key');
-        const keyPrefix = urlParams.get('key_prefix');
-        const email = urlParams.get('email');
-        
-        fullKey = key;
-        currentKeyPrefix = keyPrefix;
-        userEmail = email;
-        
-        localStorage.setItem(STORAGE_FULL_KEY, key);
-        localStorage.setItem(STORAGE_KEY_PREFIX, keyPrefix);
-        
-        showHasKeyView();
-        showFullKey(key);
-        showStatus('Your new API key has been generated! Save it now - you won\'t see it again.', 'success');
-        
-        // Clean URL
-        window.history.replaceState({}, document.title, '/');
-        
-        await fetchUsage();
-        return;
-    }
+    
     
     if (urlParams.has('key_prefix') && urlParams.has('existing')) {
         // Existing user logged in
@@ -264,50 +241,6 @@ function showNoKeyView() {
 
 /**
  * Show the "pending approval" view for disabled accounts
- */
-function showPendingApprovalView() {
-    noKeyView.classList.add('hidden');
-    hasKeyView.classList.add('hidden');
-    if (usageSection) usageSection.classList.add('hidden');
-    
-    // Show or create the pending approval view
-    let pendingView = document.getElementById('pending-approval-view');
-    if (!pendingView) {
-        pendingView = document.createElement('div');
-        pendingView.id = 'pending-approval-view';
-        pendingView.className = 'key-view';
-        pendingView.innerHTML = `
-            <div class="pending-approval-message" style="text-align: center;">
-                <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">⏳</div>
-                <h2 style="margin-bottom: 0.5rem;">Account Pending Approval</h2>
-                <p class="info-text">
-                    Your application has been submitted and is waiting for admin review.
-                    Once approved, your API key will be activated.
-                </p>
-                <p class="info-text" style="margin-top: 0.5rem;">
-                    Check back later or refresh this page to see if you've been approved.
-                </p>
-                <div style="margin-top: 1.5rem; display: flex; gap: 1rem; justify-content: center;">
-                    <button onclick="location.reload()" class="btn btn-ghost">Refresh</button>
-                    <a href="/auth/logout" class="btn btn-ghost">Logout</a>
-                </div>
-            </div>
-        `;
-        const keySection = document.getElementById('key-section');
-        keySection.appendChild(pendingView);
-    }
-    pendingView.classList.remove('hidden');
-    
-    // Show user email if available
-    if (userEmail && userEmailEl) {
-        userEmailEl.textContent = `Signed up as: ${userEmail}`;
-        userEmailEl.classList.remove('hidden');
-        pendingView.prepend(userEmailEl);
-    }
-}
-
-/**
- * Show the "has key" view
  */
 function showHasKeyView() {
     noKeyView.classList.add('hidden');

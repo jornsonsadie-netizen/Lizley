@@ -546,19 +546,11 @@ function displayKeys(keys) {
 
     noKeysMessage.classList.add('hidden');
 
-    // Separate pending applications from active keys
-    const pendingKeys = keys.filter(k => !k.enabled && k.rp_application);
-    const activeKeys = keys.filter(k => k.enabled || !k.rp_application);
-
-    // Render pending applications in their own section
-    displayPendingApplications(pendingKeys);
-
-    // Render active/non-pending keys in the table
-    if (activeKeys.length === 0) {
+    if (keys.length === 0) {
         keysTbody.innerHTML = '';
         noKeysMessage.classList.remove('hidden');
     } else {
-        keysTbody.innerHTML = activeKeys.map(key => `
+        keysTbody.innerHTML = keys.map(key => `
         <tr data-key-id="${key.id}" class="clickable" onclick="showKeyAnalytics(${key.id})">
             <td class="key-prefix">${escapeHtml(key.key_prefix)}</td>
             <td class="discord-email">
@@ -602,50 +594,7 @@ function displayKeys(keys) {
 /**
  * Display pending applications as prominent cards
  */
-function displayPendingApplications(pendingKeys) {
-    const section = document.getElementById('pending-section');
-    const container = document.getElementById('pending-applications');
-    const countEl = document.getElementById('pending-count');
-
-    if (!section || !container) return;
-
-    if (!pendingKeys || pendingKeys.length === 0) {
-        section.classList.add('hidden');
-        return;
-    }
-
-    section.classList.remove('hidden');
-    if (countEl) countEl.textContent = `${pendingKeys.length} pending`;
-
-    container.innerHTML = pendingKeys.map(key => `
-        <div class="pending-card" data-key-id="${key.id}">
-            <div class="pending-card-header">
-                <div class="pending-user-info">
-                    <span class="pending-icon">⏳</span>
-                    <div>
-                        <div class="pending-user-name">${escapeHtml(key.discord_email || key.ip_address || 'Unknown')}</div>
-                        <div class="pending-key-prefix">${escapeHtml(key.key_prefix)}</div>
-                    </div>
-                </div>
-                <span class="status-badge pending">Pending</span>
-            </div>
-            <div class="pending-card-body">
-                <div class="pending-message-label">Their Application:</div>
-                <div class="pending-message-text">${escapeHtml(key.rp_application)}</div>
-            </div>
-            <div class="pending-card-actions">
-                <button onclick="approveFromCard(${key.id})" class="btn btn-approve">
-                    ✓ Approve
-                </button>
-                <button onclick="denyFromCard(${key.id})" class="btn btn-danger">
-                    ✕ Deny
-                </button>
-            </div>
-        </div>
-    `).join('');
-}
-
-async function setBypassIp(keyId, bypass) {
+function setBypassIp(keyId, bypass) {
     try {
         const response = await adminFetch(`/admin/keys/${keyId}/bypass-ip`, {
             method: 'PUT',

@@ -393,7 +393,7 @@ async def check_and_update_rate_limits(
 ) -> RateLimitResult:
     """Check rate limits for an API key and update counters if allowed.
     
-    Enforces RPM (requests per minute) and daily token quota (TOKENS_PER_DAY_LIMIT).
+    Enforces RPM (requests per minute) and daily token quota (REQUESTS_PER_DAY_LIMIT).
     Uses atomic increment for request count; token usage is summed from usage_logs.
     
     Args:
@@ -444,13 +444,8 @@ async def check_and_update_rate_limits(
     # estimated_tokens, because the estimate (input + max_output) is a worst-case
     # upper bound that would block users who haven't used any tokens yet if they
     # send a large context.  Actual usage is recorded after the request completes.
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    today_end = today_start + timedelta(days=1)
-    daily_tokens_used = await database.get_daily_tokens_used(
-        key_record.id, today_start.isoformat(), today_end.isoformat()
-    )
-    if daily_tokens_used >= TOKENS_PER_DAY_LIMIT:
-        midnight_utc = today_end
+    if current_rpd >= REQUESTS_PER_DAY_LIMIT:
+        midnight_utc = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
         retry_after = int((midnight_utc - now).total_seconds())
         return RateLimitResult(
             allowed=False,
@@ -480,7 +475,7 @@ def create_rate_limit_response(result: RateLimitResult) -> JSONResponse:
     if result.rpm_exceeded:
         message = "Rate limit exceeded. Please wait before making more requests."
     else:
-        message = "Daily token limit exceeded. Resets at midnight UTC."
+        message = "Daily request limit exceeded. Resets at midnight UTC."
     
     return JSONResponse(
         status_code=429,
@@ -1002,248 +997,6 @@ if FRONTEND_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
 
 
-# ==================== Discord OAuth Endpoints ====================
-
-def _is_https(request: Request) -> bool:
-    """True if the client connection is HTTPS (handles proxies via X-Forwarded-Proto)."""
-    proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "").strip().lower()
-    return proto == "https"
-
-
-@app.get("/auth/login")
-async def discord_login(request: Request):
-    """Redirect to Discord OAuth login."""
-    redirect_uri = OAUTH_REDIRECT_URI
-    return await oauth.discord.authorize_redirect(request, redirect_uri)
-
-
-@app.get("/auth/callback")
-async def discord_callback(request: Request):
-    """Handle Discord OAuth callback and generate/retrieve API key."""
-    try:
-        token = await oauth.discord.authorize_access_token(request)
-        
-        # Discord requires a separate API call to get user info
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                'https://discord.com/api/users/@me',
-                headers={'Authorization': f'Bearer {token["access_token"]}'},
-            )
-            if resp.status_code != 200:
-                print(f"[Discord API Error] Status: {resp.status_code}, Body: {resp.text[:500]}")
-                return RedirectResponse(url="/?error=no_user_info")
-            user_info = resp.json()
-            
-            # Check guild membership if REQUIRED_GUILD_ID is set
-            if REQUIRED_GUILD_ID:
-                guilds_resp = await client.get(
-                    'https://discord.com/api/users/@me/guilds',
-                    headers={'Authorization': f'Bearer {token["access_token"]}'},
-                )
-                if guilds_resp.status_code != 200:
-                    print(f"[Discord Guilds API Error] Status: {guilds_resp.status_code}, Body: {guilds_resp.text[:500]}")
-                    return RedirectResponse(url="/?error=guild_check_failed")
-                
-                user_guilds = guilds_resp.json()
-                guild_ids = [str(g.get('id', '')) for g in user_guilds]
-                
-                if REQUIRED_GUILD_ID not in guild_ids:
-                    print(f"[Guild Check] User {user_info.get('username')} not in required guild {REQUIRED_GUILD_ID}")
-                    return RedirectResponse(url="/?error=not_in_guild")
-        
-        discord_id = str(user_info.get('id', ''))  # Discord user ID (snowflake)
-        discord_email = user_info.get('email', '')
-        discord_username = user_info.get('username', '')
-        # Use email if available, otherwise use username for display
-        display_name = discord_email or f"{discord_username}"
-        
-        if not discord_id:
-            return RedirectResponse(url="/?error=no_discord_id")
-        
-        # Check if user already has a key
-        existing_key = await db.get_key_by_discord_id(discord_id)
-        
-        if existing_key:
-            # Persist in both session and cookie so at least one works (browser-dependent)
-            request.session["discord_id"] = discord_id
-            response = RedirectResponse(url=f"/?key_prefix={existing_key.key_prefix}&existing=true&email={quote(display_name)}")
-            _secure = _is_https(request)
-            response.set_cookie(
-                key="discord_id",
-                value=discord_id,
-                path="/",
-                httponly=True,
-                secure=_secure,
-                samesite="lax",
-                max_age=60*60*24*365,  # 1 year
-            )
-            return response
-        
-        # NOTE: No IP-based limit for Discord OAuth — each Discord account can only
-        # have ONE key (enforced by discord_id UNIQUE constraint). The IP limit was
-        # causing problems for users on shared networks (VPNs, universities, etc.)
-        # where multiple legitimate users share the same IP address.
-        # The legacy /api/generate-key endpoint still has IP limits for abuse protection.
-        client_ip = get_client_ip(request)
-        
-        # New user — store their Discord info in session and redirect to signup page
-        # where they must answer the RP question before key generation
-        request.session["pending_discord_id"] = discord_id
-        request.session["pending_discord_email"] = display_name
-        request.session["pending_client_ip"] = client_ip
-        
-        return RedirectResponse(url=f"/signup?email={quote(display_name)}")
-        
-    except Exception as e:
-        print(f"[OAuth Error] {e}")
-        import traceback
-        traceback.print_exc()
-        # Don't put exception details in URL (security)
-        return RedirectResponse(url="/?error=oauth_failed")
-
-
-@app.post("/auth/complete-signup")
-async def complete_signup(request: Request, body: CompleteSignupRequest):
-    """Complete signup for a new user after they answer the RP question.
-    
-    Requires pending Discord OAuth data in the session (set by /auth/callback).
-    Generates the API key and stores it with the RP application answer.
-    
-    Returns:
-        JSON with the new API key details.
-    """
-    # Retrieve pending signup data from session
-    discord_id = request.session.get("pending_discord_id")
-    discord_email = request.session.get("pending_discord_email")
-    client_ip = request.session.get("pending_client_ip")
-    
-    if not discord_id:
-        raise HTTPException(status_code=400, detail="No pending signup found. Please sign in with Discord first.")
-    
-    # Validate RP application is not empty
-    rp_text = body.rp_application.strip()
-    if not rp_text:
-        raise HTTPException(status_code=400, detail="Please tell us about your RP and your most frequent style.")
-    
-    # Check if user already has a key (race condition protection)
-    existing_key = await db.get_key_by_discord_id(discord_id)
-    if existing_key:
-        # Clean up pending session data
-        request.session.pop("pending_discord_id", None)
-        request.session.pop("pending_discord_email", None)
-        request.session.pop("pending_client_ip", None)
-        request.session["discord_id"] = discord_id
-        return JSONResponse(content={
-            "key": existing_key.full_key,
-            "key_prefix": existing_key.key_prefix,
-            "email": discord_email,
-            "existing": True,
-        })
-    
-    # Generate new API key
-    api_key = generate_api_key()
-    key_hash = hash_api_key(api_key)
-    key_prefix = get_key_prefix(api_key)
-    
-    # Store in database with RP application — disabled by default until admin approves
-    await db.create_api_key(
-        discord_id=discord_id,
-        discord_email=discord_email,
-        key_hash=key_hash,
-        key_prefix=key_prefix,
-        full_key=api_key,
-        ip_address=client_ip or "unknown",
-        rp_application=rp_text,
-        enabled=False,  # Disabled until admin approves
-    )
-    
-    # Clean up pending session data and set logged-in session
-    request.session.pop("pending_discord_id", None)
-    request.session.pop("pending_discord_email", None)
-    request.session.pop("pending_client_ip", None)
-    request.session["discord_id"] = discord_id
-    
-    # Set cookie too
-    _secure = _is_https(request)
-    response = JSONResponse(content={
-        "key": api_key,
-        "key_prefix": key_prefix,
-        "email": discord_email,
-        "existing": False,
-        "pending_approval": True,
-    })
-    response.set_cookie(
-        key="discord_id",
-        value=discord_id,
-        path="/",
-        httponly=True,
-        secure=_secure,
-        samesite="lax",
-        max_age=60*60*24*365,  # 1 year
-    )
-    return response
-
-
-@app.get("/auth/logout")
-async def logout(request: Request):
-    """Clear session and cookie."""
-    request.session.clear()
-    response = RedirectResponse(url="/")
-    response.delete_cookie("discord_id", path="/", secure=_is_https(request))
-    return response
-
-
-@app.get("/api/me")
-async def get_current_user(request: Request):
-    """Get current user: session first (more reliable), then cookie."""
-    session_id = request.session.get("discord_id")
-    cookie_id = request.cookies.get("discord_id")
-    discord_id = session_id or cookie_id
-    
-    if not discord_id:
-        raise HTTPException(status_code=401, detail="Not logged in")
-    
-    # If session lost but cookie still valid, restore session
-    if not session_id and cookie_id:
-        request.session["discord_id"] = cookie_id
-    
-    key_record = await db.get_key_by_discord_id(discord_id)
-    if not key_record:
-        raise HTTPException(status_code=404, detail="No API key found")
-    
-    # Tokens used today (UTC day) for daily quota display
-    now = datetime.now(timezone.utc)
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    today_end = today_start + timedelta(days=1)
-    tokens_today = await db.get_daily_tokens_used(
-        key_record.id, today_start.isoformat(), today_end.isoformat()
-    )
-    usage_stats = await db.get_usage_stats(key_record.id)
-    
-    # Return response with refreshed discord_id cookie (keeps login alive)
-    _secure = _is_https(request)
-    response = JSONResponse(content={
-        "key_prefix": key_record.key_prefix,
-        "full_key": key_record.full_key,
-        "discord_email": key_record.discord_email,
-        "enabled": key_record.enabled,
-        "current_rpm": key_record.current_rpm,
-        "current_rpd": tokens_today,
-        "tokens_per_day_limit": TOKENS_PER_DAY_LIMIT,
-        "total_tokens": usage_stats.total_tokens,
-    })
-    response.set_cookie(
-        key="discord_id",
-        value=discord_id,
-        path="/",
-        httponly=True,
-        secure=_secure,
-        samesite="lax",
-        max_age=60 * 60 * 24 * 365,  # 1 year
-    )
-    return response
-
-
 # ==================== API Key Endpoints ====================
 
 class KeyGenerationRequest(BaseModel):
@@ -1378,7 +1131,7 @@ async def get_my_key(
         rpm_used=key_record.current_rpm,
         rpm_limit=RPM_LIMIT,
         rpd_used=tokens_today,
-        rpd_limit=TOKENS_PER_DAY_LIMIT,
+        rpd_limit=REQUESTS_PER_DAY_LIMIT,
     )
 
 
@@ -1441,8 +1194,8 @@ async def get_my_usage(
         rpm_limit=RPM_LIMIT,
         rpm_remaining=max(0, RPM_LIMIT - current_rpm),
         rpd_used=tokens_today,
-        rpd_limit=TOKENS_PER_DAY_LIMIT,
-        rpd_remaining=max(0, TOKENS_PER_DAY_LIMIT - tokens_today),
+        rpd_limit=REQUESTS_PER_DAY_LIMIT,
+        rpd_remaining=max(0, REQUESTS_PER_DAY_LIMIT - tokens_today),
         total_tokens=usage_stats.total_tokens,
     )
 
