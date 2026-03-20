@@ -146,7 +146,7 @@ class Database(ABC):
     
     # API Key operations
     @abstractmethod
-    async def create_api_key(self, discord_id: str, discord_email: Optional[str], key_hash: str, key_prefix: str, full_key: str, ip_address: str = "unknown", rp_application: Optional[str] = None, enabled: bool = True) -> int:
+    async def create_api_key(self, discord_id: str, discord_email: Optional[str], key_hash: str, key_prefix: str, full_key: str, ip_address: str = "unknown", rp_application: Optional[str] = None, enabled: bool = True, browser_fingerprint: Optional[str] = None) -> int:
         pass
     
     @abstractmethod
@@ -490,11 +490,11 @@ class SQLiteDatabase(Database):
         
         await conn.commit()
 
-    async def create_api_key(self, discord_id: str, discord_email: Optional[str], key_hash: str, key_prefix: str, full_key: str, ip_address: str = "unknown", rp_application: Optional[str] = None, enabled: bool = True) -> int:
+    async def create_api_key(self, discord_id: str, discord_email: Optional[str], key_hash: str, key_prefix: str, full_key: str, ip_address: str = "unknown", rp_application: Optional[str] = None, enabled: bool = True, browser_fingerprint: Optional[str] = None) -> int:
         conn = await self._get_connection()
         cursor = await conn.execute(
-            "INSERT INTO api_keys (discord_id, discord_email, ip_address, key_hash, key_prefix, full_key, rp_application, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (discord_id, discord_email, ip_address, key_hash, key_prefix, full_key, rp_application, 1 if enabled else 0)
+            "INSERT INTO api_keys (discord_id, discord_email, ip_address, key_hash, key_prefix, full_key, rp_application, enabled, browser_fingerprint) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (discord_id, discord_email, ip_address, key_hash, key_prefix, full_key, rp_application, 1 if enabled else 0, browser_fingerprint)
         )
         await conn.commit()
         return cursor.lastrowid
@@ -1093,12 +1093,12 @@ class PostgreSQLDatabase(Database):
                 )
             """)
 
-    async def create_api_key(self, discord_id: str, discord_email: Optional[str], key_hash: str, key_prefix: str, full_key: str, ip_address: str = "unknown", rp_application: Optional[str] = None, enabled: bool = True) -> int:
+    async def create_api_key(self, discord_id: str, discord_email: Optional[str], key_hash: str, key_prefix: str, full_key: str, ip_address: str = "unknown", rp_application: Optional[str] = None, enabled: bool = True, browser_fingerprint: Optional[str] = None) -> int:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                "INSERT INTO api_keys (discord_id, discord_email, ip_address, key_hash, key_prefix, full_key, rp_application, enabled) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id",
-                discord_id, discord_email, ip_address, key_hash, key_prefix, full_key, rp_application, enabled
+                "INSERT INTO api_keys (discord_id, discord_email, ip_address, key_hash, key_prefix, full_key, rp_application, enabled, browser_fingerprint) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id",
+                discord_id, discord_email, ip_address, key_hash, key_prefix, full_key, rp_application, enabled, browser_fingerprint
             )
             return row["id"]
 

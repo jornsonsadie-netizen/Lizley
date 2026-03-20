@@ -366,6 +366,7 @@ def get_client_ip(request: Request) -> str:
         "True-Client-IP",        # Akamai, Cloudflare Enterprise
         "X-Client-IP",           # Some proxies
         "X-Original-Forwarded-For",  # Some load balancers
+        "X-Zeabur-Forwarded-For", # Potential Zeabur header
     ]
     
     for header in proxy_headers:
@@ -576,6 +577,7 @@ async def validate_api_key(
     
     # Check if key is enabled
     if not key_record.enabled:
+        print(f"[Auth] Access denied: Key {key_hash[:8]} is disabled.")
         raise HTTPException(
             status_code=403,
             detail="This API key has been disabled"
@@ -584,6 +586,7 @@ async def validate_api_key(
     # Check if IP is banned (skip for keys with bypass_ip_ban set by admin)
     client_ip = get_client_ip(request)
     if not key_record.bypass_ip_ban and await db.is_ip_banned(client_ip):
+        print(f"[Auth] Access denied: IP {client_ip} is banned. (Key: {key_hash[:8]})")
         raise HTTPException(
             status_code=403,
             detail="Your IP address has been banned"
@@ -1077,11 +1080,10 @@ async def generate_key_endpoint(
         key_prefix=key_prefix,
         full_key=new_key,
         ip_address=client_ip,
+        browser_fingerprint=fingerprint,
     )
     
-    # Update fingerprint if provided
-    if fingerprint:
-        await db.update_key_fingerprint(key_id, fingerprint)
+    # Update not needed anymore as it's passed directly
     
     return KeyGenerationResponse(
         key=new_key,

@@ -127,38 +127,52 @@ async function checkLoggedIn() {
         
         if (response.ok) {
             const data = await response.json();
-            
             currentKeyPrefix = data.key_prefix;
             
-            // Check if account is disabled
             if (data.enabled === false) {
                 showStatus('Your API key is disabled.', 'error');
                 showNoKeyView();
                 return;
             }
             
-            // Store full key if returned
             if (data.full_key) {
                 fullKey = data.full_key;
                 localStorage.setItem(STORAGE_FULL_KEY, data.full_key);
             }
-            
             localStorage.setItem(STORAGE_KEY_PREFIX, data.key_prefix);
-            
             showHasKeyView();
-            
-            // Show full key if we have it
             if (fullKey || localStorage.getItem(STORAGE_FULL_KEY)) {
                 showFullKey(fullKey || localStorage.getItem(STORAGE_FULL_KEY));
             }
-            
             await fetchUsage();
         } else {
-            showNoKeyView();
+            // FALLBACK: If server doesn't find key by IP/FP, check if we have it in localStorage
+            const savedFullKey = localStorage.getItem(STORAGE_FULL_KEY);
+            const savedPrefix = localStorage.getItem(STORAGE_KEY_PREFIX);
+            
+            if (savedFullKey && savedPrefix) {
+                console.log('Server session lost. Using localStorage fallback.');
+                fullKey = savedFullKey;
+                currentKeyPrefix = savedPrefix;
+                showHasKeyView();
+                showFullKey(savedFullKey);
+                await fetchUsage();
+            } else {
+                showNoKeyView();
+            }
         }
     } catch (error) {
         console.error('Error checking login status:', error);
-        showNoKeyView();
+        // Even on network error, try to show the key from localStorage if we have it
+        const savedFullKey = localStorage.getItem(STORAGE_FULL_KEY);
+        if (savedFullKey) {
+            fullKey = savedFullKey;
+            currentKeyPrefix = localStorage.getItem(STORAGE_KEY_PREFIX);
+            showHasKeyView();
+            showFullKey(savedFullKey);
+        } else {
+            showNoKeyView();
+        }
     }
 }
 
