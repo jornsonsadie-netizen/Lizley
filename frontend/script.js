@@ -1,6 +1,6 @@
 /**
  * AI Proxy - Frontend JavaScript
- * Handles Discord OAuth login, API key display, and usage stats
+ * Handles API key display and usage stats
  */
 
 // Constants
@@ -10,7 +10,6 @@ const STORAGE_FULL_KEY = 'ai_proxy_full_key';
 // State
 let currentKeyPrefix = null;
 let fullKey = null;
-let userEmail = null;
 
 // DOM Elements
 const noKeyView = document.getElementById('no-key-view');
@@ -20,7 +19,6 @@ const fullKeyDisplay = document.getElementById('full-key-display');
 const fullKeyText = document.getElementById('full-key-text');
 const usageSection = document.getElementById('usage-section');
 const statusMessage = document.getElementById('status-message');
-const userEmailEl = document.getElementById('user-email');
 
 // RPM elements
 const rpmProgress = document.getElementById('rpm-progress');
@@ -39,76 +37,102 @@ const totalTokens = document.getElementById('total-tokens');
  * Initialize the application
  */
 async function init() {
-    // Check URL params for OAuth callback data
-    const urlParams = new URLSearchParams(window.location.search);
-    
-    
-    
-    if (urlParams.has('key_prefix') && urlParams.has('existing')) {
-        // Existing user logged in
-        const keyPrefix = urlParams.get('key_prefix');
-        const email = urlParams.get('email');
-        
-        currentKeyPrefix = keyPrefix;
-        userEmail = email;
-        localStorage.setItem(STORAGE_KEY_PREFIX, keyPrefix);
-        
-        showHasKeyView();
-        showStatus('Welcome back! Your existing key is still active.', 'success');
-        
-        // Clean URL
-        window.history.replaceState({}, document.title, '/');
-        
-        await fetchUsage();
-        return;
-    }
-    
-    if (urlParams.has('error')) {
-        const error = urlParams.get('error');
-        const limit = urlParams.get('limit');
-        let message;
-        if (error === 'too_many_keys') {
-            message = limit
-                ? `This IP already has ${limit} active API keys. If you're on a shared network (VPN, university, etc.), please contact support to get access.`
-                : 'This IP already has the maximum number of active API keys. If you\'re on a shared network, please contact support.';
-        } else if (error === 'oauth_failed') {
-            message = 'Discord login failed. Please try again.';
-        } else if (error === 'no_discord_id') {
-            message = 'Could not retrieve your Discord account info. Please try again.';
-        } else if (error === 'not_in_guild') {
-            message = 'You must be a member of the required Discord server to sign up. Please join the server first and try again.';
-        } else if (error === 'guild_check_failed') {
-            message = 'Could not verify your Discord server membership. Please try again.';
-        } else {
-            message = urlParams.get('message') || error;
-            message = `Login failed: ${message}`;
-        }
-        showStatus(message, 'error');
-        window.history.replaceState({}, document.title, '/');
-    }
-    
-    // Check if user is logged in via cookie
     await checkLoggedIn();
 }
 
 /**
- * Check if user is logged in via /api/me endpoint
+ * Compute Hardware Fingerprint
+ */
+async function getHardwareFingerprint() {
+    const gl = document.createElement('canvas').getContext('webgl');
+    const debugInfo = gl ? gl.getExtension('WEBGL_debug_renderer_info') : null;
+    const renderer = debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : '';
+    const vendor = debugInfo ? gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) : '';
+    const screenInfo = `${window.screen.width}x${window.screen.height}x${window.screen.colorDepth}`;
+    const cores = navigator.hardwareConcurrency || '';
+    const ram = navigator.deviceMemory || '';
+    const os = navigator.platform;
+    const str = `${renderer}-${vendor}-${screenInfo}-${cores}-${ram}-${os}`;
+    
+    // Use fallback hashing locally over HTTP since crypto.subtle requires HTTPS
+    if (!window.crypto || !window.crypto.subtle) {
+        console.warn('Crypto.subtle API not available (requires HTTPS). Using insecure fallback hash.');
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+            const char = str.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash; // Convert to 32bit int
+        }
+        return Math.abs(hash).toString(16) + str.length.toString(16);
+    }
+    
+    const msgUint8 = new TextEncoder().encode(str);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * Generate API Key using Fingerprint
+ */
+async function generateKey() {
+    try {
+        const btn = document.getElementById('generate-btn');
+        if (btn) {
+            btn.textContent = 'Generating...';
+            btn.disabled = true;
+        }
+        
+        const fingerprint = await getHardwareFingerprint();
+        const response = await fetch('/api/generate-key', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ fingerprint })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            fullKey = data.key;
+            currentKeyPrefix = data.key_prefix;
+            localStorage.setItem(STORAGE_FULL_KEY, data.key);
+            localStorage.setItem(STORAGE_KEY_PREFIX, data.key_prefix);
+            
+            showHasKeyView();
+            showFullKey(data.key);
+            showStatus(data.message, 'success');
+            await fetchUsage();
+        } else {
+            showStatus(data.detail || 'Failed to generate key', 'error');
+        }
+    } catch (e) {
+        showStatus('Network error generating key', 'error');
+        console.error(e);
+    } finally {
+        const btn = document.getElementById('generate-btn');
+        if (btn) {
+            btn.textContent = 'Generate API Key';
+            btn.disabled = false;
+        }
+    }
+}
+
+/**
+ * Check if user is logged in via /api/my-key endpoint
  */
 async function checkLoggedIn() {
     try {
-        const response = await fetch('/api/me', {
-            credentials: 'include'  // Include cookies
-        });
+        const response = await fetch('/api/my-key');
         
         if (response.ok) {
             const data = await response.json();
             
             currentKeyPrefix = data.key_prefix;
-            userEmail = data.discord_email;
             
-            // Check if account is pending approval (disabled)
+            // Check if account is disabled
             if (data.enabled === false) {
-                showPendingApprovalView();
+                showStatus('Your API key is disabled.', 'error');
+                showNoKeyView();
                 return;
             }
             
@@ -129,7 +153,6 @@ async function checkLoggedIn() {
             
             await fetchUsage();
         } else {
-            // Not logged in
             showNoKeyView();
         }
     } catch (error) {
@@ -143,15 +166,13 @@ async function checkLoggedIn() {
  */
 async function fetchUsage() {
     try {
-        const response = await fetch('/api/me', {
-            credentials: 'include'
-        });
+        const response = await fetch('/api/my-usage');
         
         if (response.ok) {
             const data = await response.json();
             updateUsageDisplay(data);
             if (usageSection) usageSection.classList.remove('hidden');
-        } else if (response.status === 404 || response.status === 401) {
+        } else {
             if (usageSection) usageSection.classList.add('hidden');
         }
     } catch (error) {
@@ -160,25 +181,25 @@ async function fetchUsage() {
 }
 
 /**
- * Update the usage display with new data (RPM, tokens per day, total tokens)
+ * Update the usage display with new data (RPM, requests per day, total tokens)
  */
 function updateUsageDisplay(data) {
-    const rpmLimitVal = 10;
-    const rpdLimitVal = data.tokens_per_day_limit ?? 150000;
+    const rpmLimitVal = data.rpm_limit ?? 10;
+    const rpdLimitVal = data.rpd_limit ?? 200;
     
     // Update RPM
-    const rpm = data.current_rpm ?? 0;
+    const rpm = data.rpm_used ?? 0;
     const rpmPercent = rpmLimitVal > 0 ? (rpm / rpmLimitVal) * 100 : 0;
     rpmProgress.style.width = `${Math.min(rpmPercent, 100)}%`;
     rpmUsed.textContent = rpm;
     rpmLimit.textContent = rpmLimitVal;
     
-    // Update tokens per day (current_rpd = tokens used today)
-    const rpd = data.current_rpd ?? 0;
+    // Update requests per day (current_rpd = requests used today)
+    const rpd = data.rpd_used ?? 0;
     const rpdPercent = rpdLimitVal > 0 ? (rpd / rpdLimitVal) * 100 : 0;
-    rpdProgress.style.width = `${Math.min(rpdPercent, 100)}%`;
-    rpdUsed.textContent = typeof rpd === 'number' ? rpd.toLocaleString() : String(rpd);
-    rpdLimit.textContent = typeof rpdLimitVal === 'number' ? rpdLimitVal.toLocaleString() : rpdLimitVal;
+    if (rpdProgress) rpdProgress.style.width = `${Math.min(rpdPercent, 100)}%`;
+    if (rpdUsed) rpdUsed.textContent = typeof rpd === 'number' ? rpd.toLocaleString() : String(rpd);
+    if (rpdLimit) rpdLimit.textContent = typeof rpdLimitVal === 'number' ? rpdLimitVal.toLocaleString() : rpdLimitVal;
     
     // Total tokens used (all time)
     if (totalTokens) {
@@ -203,11 +224,13 @@ async function copyKey() {
         showStatus(`API key copied! (${keyToCopy.length} chars)`, 'success');
         
         const copyBtn = document.getElementById('copy-btn');
-        const originalText = copyBtn.textContent;
-        copyBtn.textContent = 'Copied!';
-        setTimeout(() => {
-            copyBtn.textContent = originalText;
-        }, 2000);
+        if (copyBtn) {
+            const originalText = copyBtn.textContent;
+            copyBtn.textContent = 'Copied!';
+            setTimeout(() => {
+                copyBtn.textContent = originalText;
+            }, 2000);
+        }
     } catch (error) {
         console.error('Error copying to clipboard:', error);
         
@@ -240,7 +263,7 @@ function showNoKeyView() {
 }
 
 /**
- * Show the "pending approval" view for disabled accounts
+ * Show the "has key" view
  */
 function showHasKeyView() {
     noKeyView.classList.add('hidden');
@@ -251,12 +274,6 @@ function showHasKeyView() {
     // Update key prefix display
     if (currentKeyPrefix) {
         keyPrefixEl.textContent = currentKeyPrefix;
-    }
-    
-    // Show user email
-    if (userEmail && userEmailEl) {
-        userEmailEl.textContent = `Logged in as: ${userEmail}`;
-        userEmailEl.classList.remove('hidden');
     }
 }
 
