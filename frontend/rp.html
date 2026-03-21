@@ -3,18 +3,18 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="description" content="LizRP - Roleplay with AI Models">
     <title>LizRP ✧ Hub</title>
 
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;1,300;1,400;1,500&family=Quicksand:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;1,300;1,400;1,500&family=Quicksand:wght@300;400;500;600&family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
 
     <!-- Styles -->
-    <link rel="stylesheet" href="/static/style.css?v=20260320_v2">
-    <link rel="stylesheet" href="/static/rp.css?v=20260320_v2">
+    <link rel="stylesheet" href="/static/style.css?v=20260321_v1">
+    <link rel="stylesheet" href="/static/rp.css?v=20260321_v1">
 </head>
 
 <body>
@@ -28,94 +28,171 @@
         <span class="icon-moon">🌙</span>
     </button>
 
-    <!-- Navigation Bar -->
-    <nav class="navbar" style="position: relative; z-index: 100;">
+    <!-- Navigation Bar (Top Branding) -->
+    <nav class="navbar">
         <div class="nav-brand-container">
             <a href="/rp" class="nav-brand">✧ LizRP ✧</a>
         </div>
-        <div class="nav-links">
+        <div class="nav-links desktop-only">
             <a href="/" class="nav-link">Home</a>
             <a href="/rp" class="nav-link rp-active-link">LizRP</a>
-            <button id="auth-nav-btn" class="btn btn-ghost btn-sm" onclick="showLoginModal()">Sign In</button>
-            <div id="user-profile-menu" class="user-menu hidden">
-                <span id="nav-username" class="username-display" onclick="showProfileModal()" title="View Profile"></span>
-                <button onclick="logoutRp()" class="btn btn-ghost btn-sm">Sign Out</button>
-            </div>
+        </div>
+        <div id="user-profile-menu-top" class="user-menu-top" style="display: flex; gap: 8px;">
+            <button class="btn btn-ghost btn-sm premium" onclick="showAdminAuth()">✧ Admin ✧</button>
+            <button id="auth-nav-btn" class="btn btn-ghost btn-sm" onclick="showView('profile')">Sign In</button>
         </div>
     </nav>
 
     <!-- Main App Container -->
     <div class="rp-container">
-        
-        <!-- Collapsible Sidebar -->
-        <aside id="rp-sidebar" class="rp-sidebar">
-            <div class="sidebar-content">
-                <div class="sidebar-header">
-                    <h3>Recent Chats</h3>
-                    <button class="btn btn-ghost btn-sm mobile-only" onclick="toggleSidebar()">✕</button>
-                </div>
-                
-                <div id="old-chats-list" class="chats-list">
-                    <div class="loading-text">Sign in to view chats</div>
-                </div>
-
-                <div class="sidebar-footer">
-                    <button class="btn btn-primary btn-full" onclick="showDiscoveryHub()">+ New Bot</button>
-                </div>
-            </div>
-        </aside>
-
         <!-- Main Content Area -->
         <main id="rp-main-content" class="rp-main">
             
-            <!-- Discovery Hub (Default View) -->
-            <div id="discovery-hub" class="view-panel active-view">
+            <!-- Tab: Home (Discovery Hub) -->
+            <div id="view-home" class="view-panel active-view">
                 <div class="hub-header">
-                    <h2>✧ Public Bots ✧</h2>
-                    <button class="btn btn-primary shadow-glow" onclick="showCreateBotModal()">+ Create Bot</button>
+                    <div class="search-container">
+                        <span class="search-icon">🔍</span>
+                        <input type="text" id="bot-search" placeholder="Search characters..." oninput="handleBotSearch(this.value)">
+                    </div>
                 </div>
-                <!-- Controls for importing -->
-                <div class="hub-controls" style="margin-bottom: 2rem; display: flex; gap: 1rem; align-items: center;">
-                    <button class="btn btn-ghost btn-sm" onclick="triggerCardImport()">Import Character Card (PNG/JSON)</button>
-                    <input type="file" id="card-upload" accept=".png,.json" class="hidden" onchange="handleCardImport(event)">
-                    <p class="subtitle" style="margin:0; font-size: 0.9rem;">Start exploring the LizRP universe.</p>
-                </div>
-
-                <div id="bots-grid" class="bots-grid">
-                    <div class="loading-spinner">Loading bots...</div>
+                
+                <div class="hub-sections">
+                    <div class="hub-section">
+                        <h3>✧ Discovery ✧</h3>
+                        <div id="bots-grid" class="bots-grid">
+                            <div class="loading-spinner">Loading bots...</div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
-            <!-- Bot Profile View (Intermediate State) -->
+            <!-- Tab: Create Bot -->
+            <div id="view-create" class="view-panel hidden">
+                <div class="create-header">
+                    <h2 class="premium-title">Create Your Character</h2>
+                    <p class="subtitle">Build your character's profile from the ground up.</p>
+                </div>
+                
+                <div class="modern-form-container">
+                    <form id="create-bot-form" class="modern-form" onsubmit="handleBotSubmit(event)">
+                        <section class="form-section">
+                            <h4>Core Identity</h4>
+                            <div class="form-group">
+                                <label>Name <span class="required">*</span></label>
+                                <input type="text" id="bot-name" required class="input-modern" placeholder="e.g., Captain Eva Rostova">
+                            </div>
+                            <div class="form-group">
+                                <label>Avatar</label>
+                                <div class="avatar-upload-zone" onclick="document.getElementById('bot-avatar-upload').click()">
+                                    <img id="bot-avatar-preview" src="" class="hidden">
+                                    <div id="bot-avatar-placeholder">Click to upload avatar</div>
+                                    <input type="file" id="bot-avatar-upload" accept="image/*" class="hidden" onchange="handleAvatarChange(event, 'bot')">
+                                </div>
+                            </div>
+                        </section>
+
+                        <section class="form-section">
+                            <h4>Narrative Details</h4>
+                            <div class="form-group">
+                                <label>Character Description <span class="required">*</span></label>
+                                <textarea id="bot-description" required class="modern-textarea" rows="3" placeholder="Elaborate on their history and motivations..."></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label>Personality / Instructions</label>
+                                <textarea id="bot-personality" class="modern-textarea" rows="4" placeholder="How they speak and behave..."></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label>Scenario / Lore</label>
+                                <textarea id="bot-lore" class="modern-textarea" rows="4" placeholder="Background story and context..."></textarea>
+                            </div>
+                        </section>
+
+                        <section class="form-section">
+                            <h4>Character Tags</h4>
+                            <div class="form-group">
+                                <input type="text" id="bot-tags" class="input-modern" placeholder="e.g., Romance, Fantasy, Tsundere">
+                            </div>
+                        </section>
+
+                        <div id="bot-error" class="status-message error hidden"></div>
+                        <button type="submit" class="btn btn-primary btn-full shadow-glow">Create Character</button>
+                        <button type="button" class="btn btn-ghost btn-full" onclick="triggerCardImport()">Import Character Card</button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Tab: Chats (Conversation List) -->
+            <div id="view-chats" class="view-panel hidden">
+                <div class="chats-header">
+                    <h2>Your Conversations</h2>
+                </div>
+                <div id="old-chats-list" class="chats-list">
+                    <div class="loading-text">Sign in to view your chats.</div>
+                </div>
+            </div>
+
+            <!-- Tab: Profile (User Settings & Admin) -->
+            <div id="view-profile" class="view-panel hidden">
+                <div class="profile-page-header">
+                    <div class="profile-avatar-wrapper">
+                        <img id="page-user-avatar" src="/static/default-avatar.png" alt="Avatar" class="user-avatar-large">
+                    </div>
+                    <h2 id="page-username">Guest User</h2>
+                    <p class="subtitle" id="page-user-id">Sign in to unlock full features</p>
+                </div>
+
+                <div class="profile-menu">
+                    <div class="menu-group" id="profile-auth-group">
+                        <button class="menu-item highlight" onclick="showLoginModal()">Sign In / Register</button>
+                    </div>
+
+                    <div class="menu-group hidden" id="profile-settings-group">
+                        <h4>Account Settings</h4>
+                        <button class="menu-item" onclick="showProfileModal()">Edit Profile</button>
+                        <button class="menu-item" onclick="showOcModal()">Manage Personas (OCs)</button>
+                    </div>
+
+                    <div id="admin-section" class="menu-group hidden">
+                        <h4>Administration</h4>
+                        <button class="menu-item premium" onclick="showAdminAuth()">✧ Control Center ✧</button>
+                    </div>
+
+                    <div class="menu-group hidden" id="profile-actions-group">
+                        <button class="menu-item logout" onclick="logoutRp()">Sign Out</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- View: Bot Profile (Overlay View) -->
             <div id="bot-profile-view" class="view-panel hidden">
-                <div class="profile-card card slide-in">
-                    <button class="btn btn-ghost btn-icon close-profile-btn" onclick="showDiscoveryHub()">✕</button>
-                    <div class="profile-header">
-                        <img id="profile-bot-avatar" src="" alt="Bot Avatar" class="profile-avatar scale-up">
-                        <div class="profile-titles">
+                <div class="profile-card-full">
+                    <button class="btn btn-ghost btn-icon close-profile-btn" onclick="showView('home')">✕</button>
+                    <div class="profile-header-wide">
+                        <img id="profile-bot-avatar" src="" alt="Bot">
+                        <div class="profile-info-overlay">
                             <h2 id="profile-bot-name">Bot Name</h2>
-                            <p id="profile-bot-creator" class="creator-tag">by User</p>
+                            <p id="profile-bot-creator">by User</p>
                         </div>
                     </div>
-                    <div class="profile-body">
+                    <div class="profile-content-scroll">
                         <div class="profile-section">
                             <h4>About</h4>
                             <p id="profile-bot-desc"></p>
                         </div>
                         <div id="profile-tags" class="bot-card-tags"></div>
-                        
-                        <div class="profile-actions">
+                        <div class="profile-actions-sticky">
                             <button id="start-chat-btn" class="btn btn-primary btn-large shadow-glow" onclick="startNewChat()">Start Conversation</button>
                         </div>
                     </div>
                 </div>
             </div>
 
-            <!-- Chat Interface -->
+            <!-- View: Chat Interface (Active Chat View) -->
             <div id="chat-interface" class="view-panel hidden">
                 <div class="chat-header">
                     <div class="chat-bot-info">
-                        <button class="btn btn-ghost btn-icon back-btn" onclick="showDiscoveryHub()" title="Back to Hub">←</button>
+                        <button class="btn btn-ghost btn-icon back-btn" onclick="showView('chats')" title="Back to Chats">←</button>
                         <img id="chat-bot-avatar" src="" alt="Bot Avatar" class="chat-avatar default-avatar">
                         <div class="chat-bot-details">
                             <h3 id="chat-bot-name">Bot Name</h3>
@@ -146,13 +223,8 @@
                         <hr>
                         <div class="menu-section">
                             <h4>Actions</h4>
-                            <button class="menu-action-btn" onclick="showDiscoveryHub()">Start New Chat</button>
+                            <button class="menu-action-btn" onclick="showView('home')">Start New Chat</button>
                             <button class="menu-action-btn" onclick="triggerWallpaperUpload()">Change Wallpaper</button>
-                        </div>
-                        <hr>
-                        <div class="menu-section">
-                            <h4>Recent Chats</h4>
-                            <div id="menu-old-chats" class="menu-chats-list"></div>
                         </div>
                     </div>
                 </div>
@@ -169,15 +241,33 @@
                     <div class="input-wrapper">
                         <button class="btn btn-ghost btn-icon attachment-btn" onclick="triggerChatAttachment()" title="Attach Image">📎</button>
                         <input type="file" id="chat-attachment" accept="image/*" class="hidden" onchange="handleChatAttachment(event)">
-                        
-                        <textarea id="chat-input" class="modern-textarea" placeholder="Type your message... (Shift+Enter for newline)" rows="1" oninput="autoResizeTextarea(this)" onkeydown="handleChatKeydown(event)"></textarea>
-                        
+                        <textarea id="chat-input" class="modern-textarea" placeholder="Type your message..." rows="1" oninput="autoResizeTextarea(this)" onkeydown="handleChatKeydown(event)"></textarea>
                         <button class="btn btn-primary shadow-glow send-btn" onclick="sendMessage()">Send</button>
                     </div>
                 </div>
             </div>
 
         </main>
+        
+        <!-- Bottom Navigation Bar -->
+        <nav class="bottom-nav">
+            <button class="nav-btn active" onclick="showView('home')" id="nav-home">
+                <img src="/assets/home.png" class="nav-icon-img" alt="Home">
+                <span class="nav-text">Home</span>
+            </button>
+            <button class="nav-btn" onclick="showView('create')" id="nav-create">
+                <img src="/assets/create.png" class="nav-icon-img" alt="Create">
+                <span class="nav-text">Create</span>
+            </button>
+            <button class="nav-btn" onclick="showView('chats')" id="nav-chats">
+                <img src="/assets/chats.png" class="nav-icon-img" alt="Chats">
+                <span class="nav-text">Chats</span>
+            </button>
+            <button class="nav-btn" onclick="showView('profile')" id="nav-profile">
+                <img src="/assets/profile.png" class="nav-icon-img" alt="Profile">
+                <span class="nav-text">Profile</span>
+            </button>
+        </nav>
     </div>
 
     <!-- Modals -->
@@ -205,7 +295,7 @@
         </div>
     </div>
 
-    <!-- User Profile Modal -->
+    <!-- User Profile Settings Modal -->
     <div id="profile-modal" class="modal hidden">
         <div class="modal-content card slide-in">
             <h2>User Profile</h2>
@@ -227,57 +317,6 @@
                 </div>
             </form>
             <button onclick="closeModal('profile-modal')" class="close-modal-btn">✕</button>
-        </div>
-    </div>
-
-    <!-- Create/Edit Bot Modal -->
-    <div id="bot-modal" class="modal hidden">
-        <div class="modal-content card slide-in large-modal">
-            <h2 id="bot-modal-title">Create Bot</h2>
-            <form id="bot-form" onsubmit="handleBotSubmit(event)">
-                <div class="form-row">
-                    <!-- Left Column: Avatar & Name & Tags -->
-                    <div class="form-col" style="flex: 1;">
-                        <div class="avatar-upload-container">
-                            <img id="bot-avatar-preview" src="" class="avatar-preview hidden">
-                            <div id="bot-avatar-placeholder" class="avatar-placeholder">Upload Avatar</div>
-                            <input type="file" id="bot-avatar-upload" accept="image/*" class="hidden" onchange="handleAvatarChange(event, 'bot')">
-                            <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('bot-avatar-upload').click()">Choose Image</button>
-                        </div>
-                        
-                        <div class="form-group">
-                            <label>Name</label>
-                            <input type="text" id="bot-name" required class="input-modern" placeholder="Character Name">
-                        </div>
-                        <div class="form-group">
-                            <label>Tags (Comma separated)</label>
-                            <input type="text" id="bot-tags" class="input-modern" placeholder="Fantasy, Romance, Scifi...">
-                        </div>
-                    </div>
-
-                    <!-- Right Column: Lore & Personality -->
-                    <div class="form-col" style="flex: 2;">
-                        <div class="form-group">
-                            <label>Description (Short)</label>
-                            <textarea id="bot-description" class="modern-textarea" rows="2" placeholder="A brief public description of the character."></textarea>
-                        </div>
-                        <div class="form-group">
-                            <label>Lore / Scenario</label>
-                            <textarea id="bot-lore" class="modern-textarea" rows="4" placeholder="Background story and current scenario context."></textarea>
-                        </div>
-                        <div class="form-group">
-                            <label>Personality / Instructions</label>
-                            <textarea id="bot-personality" class="modern-textarea" rows="4" placeholder="How the bot should speak and behave. Traits, tics, rules."></textarea>
-                        </div>
-                    </div>
-                </div>
-                <div id="bot-error" class="status-message error hidden"></div>
-                <div class="modal-actions" style="margin-top: 2rem; display: flex; justify-content: flex-end; gap: 1rem;">
-                    <button type="button" class="btn btn-ghost" onclick="closeModal('bot-modal')">Cancel</button>
-                    <button type="submit" class="btn btn-primary" id="bot-submit-btn">Save Bot</button>
-                </div>
-            </form>
-            <button onclick="closeModal('bot-modal')" class="close-modal-btn">✕</button>
         </div>
     </div>
 
@@ -324,6 +363,73 @@
     <!-- Toast Notifications -->
     <div id="toast-container" class="toast-container"></div>
 
-    <script src="/static/rp.js?v=20260320_v2"></script>
+    <!-- Admin Authentication Modal -->
+    <div id="admin-auth-modal" class="modal hidden">
+        <div class="modal-content card slide-in">
+            <h2 class="premium-title">✧ Admin Access ✧</h2>
+            <p class="subtitle" style="text-align: center; margin-bottom: 2rem;">Please enter the management password.</p>
+            <form id="admin-auth-form" onsubmit="handleAdminAuth(event)">
+                <div class="form-group">
+                    <label>Admin Password</label>
+                    <input type="password" id="admin-password-input" required class="input-modern" placeholder="••••••••">
+                </div>
+                <div id="admin-auth-error" class="status-message error hidden"></div>
+                <button type="submit" class="btn btn-primary btn-full shadow-glow">Unlock Dashboard</button>
+            </form>
+            <button onclick="closeModal('admin-auth-modal')" class="close-modal-btn">✕</button>
+        </div>
+    </div>
+
+    <!-- Admin Dashboard Modal -->
+    <div id="admin-dashboard-modal" class="modal hidden">
+        <div class="modal-content card slide-in large-modal glass-deep">
+            <h2 class="premium-title">✧ LizRP Control Center ✧</h2>
+            <p class="subtitle" style="text-align: center; margin-bottom: 2.5rem;">Configure API providers and proxy limits.</p>
+            
+            <form id="admin-config-form" onsubmit="handleAdminConfigSubmit(event)">
+                <div class="form-row">
+                    <div class="form-col" style="flex: 1.5;">
+                        <h4 class="section-label">Connectivity</h4>
+                        <div class="form-group">
+                            <label>Target API Endpoint</label>
+                            <input type="text" id="admin-api-url" class="input-modern" placeholder="https://api.openai.com/v1">
+                        </div>
+                        <div class="form-group">
+                            <label>Target API Key</label>
+                            <input type="password" id="admin-api-key" class="input-modern" placeholder="••••••••••••••••">
+                            <small class="info-text">Enter new key to update, leave blank to keep current.</small>
+                        </div>
+                    </div>
+                    
+                    <div class="form-col" style="flex: 1;">
+                        <h4 class="section-label">Session Defaults</h4>
+                        <div class="form-group">
+                            <label>Max Context (Tokens)</label>
+                            <input type="number" id="admin-max-context" class="input-modern" placeholder="4096">
+                        </div>
+                        <div class="form-group">
+                            <label>Max Output (Tokens)</label>
+                            <input type="number" id="admin-max-output" class="input-modern" placeholder="1024">
+                        </div>
+                        <div class="form-group">
+                            <label>Max Keys per IP</label>
+                            <input type="number" id="admin-max-keys-ip" class="input-modern" placeholder="20">
+                        </div>
+                    </div>
+                </div>
+
+                <div id="admin-config-error" class="status-message error hidden"></div>
+                <div id="admin-config-success" class="status-message success hidden">Settings updated successfully!</div>
+
+                <div class="modal-actions" style="margin-top: 3rem; display: flex; justify-content: flex-end; gap: 1rem;">
+                    <button type="button" class="btn btn-ghost" onclick="closeModal('admin-dashboard-modal')">Close</button>
+                    <button type="submit" id="admin-save-btn" class="btn btn-primary shadow-glow">Apply Changes</button>
+                </div>
+            </form>
+            <button onclick="closeModal('admin-dashboard-modal')" class="close-modal-btn">✕</button>
+        </div>
+    </div>
+
+    <script src="/static/rp.js?v=20260321_v1"></script>
 </body>
 </html>

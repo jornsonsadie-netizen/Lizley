@@ -3,6 +3,7 @@ import uuid
 import hashlib
 import json
 from datetime import datetime
+import dataclasses
 from threading import Lock
 from typing import List, Optional, Dict, Any
 
@@ -13,6 +14,31 @@ from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
 from backend.database import Database, RpUser, RpBot, RpOc, RpChat
 
 rp_router = APIRouter(prefix="/api/rp", tags=["lizrp"])
+
+# --- Helpers ---
+def bot_to_dict(bot: RpBot) -> Dict[str, Any]:
+    d = dataclasses.asdict(bot)
+    if isinstance(d.get("created_at"), datetime):
+        d["created_at"] = d["created_at"].isoformat()
+    return d
+
+def oc_to_dict(oc: RpOc) -> Dict[str, Any]:
+    d = dataclasses.asdict(oc)
+    if isinstance(d.get("created_at"), datetime):
+        d["created_at"] = d["created_at"].isoformat()
+    return d
+
+def chat_to_dict(chat: RpChat) -> Dict[str, Any]:
+    d = dataclasses.asdict(chat)
+    if isinstance(d.get("updated_at"), datetime):
+        d["updated_at"] = d["updated_at"].isoformat()
+    # Messages are already a string in the dataclass from DB
+    if isinstance(d.get("messages"), str):
+        try:
+            d["messages_parsed"] = json.loads(d["messages"])
+        except:
+            d["messages_parsed"] = []
+    return d
 
 # --- Security & Auth ---
 
@@ -174,14 +200,21 @@ async def create_bot(req: BotCreate, request: Request, current_user: RpUser = De
     if not success:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create bot")
         
-    return await db.get_rp_bot_by_id(bot_id)
+    bot = await db.get_rp_bot_by_id(bot_id)
+    return bot_to_dict(bot) if bot else None
 
 @rp_router.get("/bots")
 async def list_bots(request: Request, search: Optional[str] = None, page: int = 1, limit: int = 50):
     db: Database = request.app.state.db
     offset = (page - 1) * limit
-    bots = await db.get_rp_bots(limit=limit, offset=offset, search_query=search)
-    return {"bots": bots, "page": page, "limit": limit}
+    try:
+        bots = await db.get_rp_bots(limit=limit, offset=offset, search_query=search)
+        return {"bots": [bot_to_dict(b) for b in bots], "page": page, "limit": limit}
+    except Exception as e:
+        import traceback
+        print(f"ERROR list_bots: {str(e)}")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     
 @rp_router.get("/bots/{bot_id}")
 async def get_bot(bot_id: str, request: Request):
@@ -189,7 +222,7 @@ async def get_bot(bot_id: str, request: Request):
     bot = await db.get_rp_bot_by_id(bot_id)
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
-    return bot
+    return bot_to_dict(bot)
 
 @rp_router.put("/bots/{bot_id}")
 async def update_bot(bot_id: str, req: BotCreate, request: Request, current_user: RpUser = Depends(get_current_user)):
@@ -219,13 +252,14 @@ async def create_oc(req: OcCreate, request: Request, current_user: RpUser = Depe
     if not success:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create OC")
         
-    return await db.get_rp_oc_by_id(oc_id)
+        
+    return oc_to_dict(await db.get_rp_oc_by_id(oc_id))
 
 @rp_router.get("/ocs")
 async def list_user_ocs(request: Request, current_user: RpUser = Depends(get_current_user)):
     db: Database = request.app.state.db
     ocs = await db.get_rp_ocs_by_owner(current_user.id)
-    return {"ocs": ocs}
+    return {"ocs": [oc_to_dict(o) for o in ocs]}
     
 @rp_router.get("/ocs/{oc_id}")
 async def get_oc(oc_id: str, request: Request, current_user: RpUser = Depends(get_current_user)):
@@ -235,7 +269,7 @@ async def get_oc(oc_id: str, request: Request, current_user: RpUser = Depends(ge
         raise HTTPException(status_code=404, detail="OC not found")
     if oc.owner_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
-    return oc
+    return oc_to_dict(oc)
 
 @rp_router.put("/ocs/{oc_id}")
 async def update_oc(oc_id: str, req: OcCreate, request: Request, current_user: RpUser = Depends(get_current_user)):
@@ -251,7 +285,8 @@ async def update_oc(oc_id: str, req: OcCreate, request: Request, current_user: R
     if not success:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update OC")
         
-    return await db.get_rp_oc_by_id(oc_id)
+    oc = await db.get_rp_oc_by_id(oc_id)
+    return oc_to_dict(oc)
 
 
 # --- Chat Management ---
@@ -273,7 +308,8 @@ async def create_chat(req: ChatCreate, request: Request, current_user: RpUser = 
     if not success:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create chat")
         
-    return await db.get_rp_chat_by_id(chat_id)
+    chat = await db.get_rp_chat_by_id(chat_id)
+    return chat_to_dict(chat) if chat else None
 
 @rp_router.get("/chats")
 async def list_chats(request: Request, current_user: RpUser = Depends(get_current_user)):
@@ -290,7 +326,7 @@ async def list_chats(request: Request, current_user: RpUser = Depends(get_curren
             "bot_name": bot.name if bot else "Unknown Bot",
             "bot_avatar": bot.avatar if bot else None,
             "model_id": chat.model_id,
-            "updated_at": chat.updated_at
+            "updated_at": chat.updated_at.isoformat() if isinstance(chat.updated_at, datetime) else chat.updated_at
         }
         chat_list.append(chat_dict)
         
@@ -305,15 +341,19 @@ async def get_chat(chat_id: str, request: Request, current_user: RpUser = Depend
     if chat.owner_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
         
-    # Return full chat context
+    bot = await db.get_rp_bot_by_id(chat.bot_id)
+    
     return {
         "id": chat.id,
         "bot_id": chat.bot_id,
+        "bot_name": bot.name if bot else "Unknown Bot",
+        "bot_avatar": bot.avatar if bot else None,
+        "bot_creator_name": bot.creator_name if bot else "System",
         "oc_id": chat.oc_id,
         "wallpaper": chat.wallpaper,
         "model_id": chat.model_id,
-        "messages": json.loads(chat.messages) if chat.messages else [],
-        "updated_at": chat.updated_at
+        "messages": json.loads(chat.messages) if isinstance(chat.messages, str) and chat.messages else (chat.messages if isinstance(chat.messages, list) else []),
+        "updated_at": chat.updated_at.isoformat() if isinstance(chat.updated_at, datetime) else chat.updated_at
     }
 
 @rp_router.put("/chats/{chat_id}")

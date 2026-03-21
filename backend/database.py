@@ -150,6 +150,7 @@ class RpBot:
     tags: Optional[str]
     creator_id: Optional[str]
     created_at: datetime
+    creator_name: Optional[str] = None
 
 @dataclass
 class RpOc:
@@ -1216,10 +1217,16 @@ class SQLiteDatabase(Database):
             return False
             
     async def _row_to_rp_bot(self, row) -> RpBot:
+        try:
+            creator_name = row["creator_name"]
+        except (IndexError, KeyError, TypeError):
+            creator_name = None
+            
         return RpBot(
             id=row["id"], name=row["name"], avatar=row["avatar"], description=row["description"],
             lore=row["lore"], personality=row["personality"], tags=row["tags"],
-            creator_id=row["creator_id"], created_at=self._parse_ts(row["created_at"])
+            creator_id=row["creator_id"], created_at=self._parse_ts(row["created_at"]),
+            creator_name=creator_name
         )
 
     # RP Bots
@@ -1232,17 +1239,27 @@ class SQLiteDatabase(Database):
         
     async def get_rp_bots(self, limit: int = 50, offset: int = 0, search_query: Optional[str] = None) -> List[RpBot]:
         conn = await self._get_connection()
+        base_query = """
+            SELECT b.*, u.username as creator_name 
+            FROM rp_bots b 
+            LEFT JOIN rp_users u ON b.creator_id = u.id
+        """
         if search_query:
             q = f"%{search_query}%"
-            cursor = await conn.execute("SELECT * FROM rp_bots WHERE name LIKE ? OR tags LIKE ? ORDER BY created_at DESC LIMIT ? OFFSET ?", (q, q, limit, offset))
+            cursor = await conn.execute(f"{base_query} WHERE b.name LIKE ? OR b.tags LIKE ? ORDER BY b.created_at DESC LIMIT ? OFFSET ?", (q, q, limit, offset))
         else:
-            cursor = await conn.execute("SELECT * FROM rp_bots ORDER BY created_at DESC LIMIT ? OFFSET ?", (limit, offset))
+            cursor = await conn.execute(f"{base_query} ORDER BY b.created_at DESC LIMIT ? OFFSET ?", (limit, offset))
         rows = await cursor.fetchall()
         return [await self._row_to_rp_bot(row) for row in rows]
         
     async def get_rp_bot_by_id(self, id: str) -> Optional[RpBot]:
         conn = await self._get_connection()
-        cursor = await conn.execute("SELECT * FROM rp_bots WHERE id = ?", (id,))
+        cursor = await conn.execute("""
+            SELECT b.*, u.username as creator_name 
+            FROM rp_bots b 
+            LEFT JOIN rp_users u ON b.creator_id = u.id 
+            WHERE b.id = ?
+        """, (id,))
         row = await cursor.fetchone()
         return await self._row_to_rp_bot(row) if row else None
         
@@ -2186,7 +2203,8 @@ class PostgreSQLDatabase(Database):
             id=row["id"], name=row["name"], avatar=self._safe_get(row, "avatar"),
             description=self._safe_get(row, "description"), lore=self._safe_get(row, "lore"),
             personality=self._safe_get(row, "personality"), tags=self._safe_get(row, "tags"),
-            creator_id=self._safe_get(row, "creator_id"), created_at=row["created_at"]
+            creator_id=self._safe_get(row, "creator_id"), created_at=row["created_at"],
+            creator_name=self._safe_get(row, "creator_name")
         )
 
     # RP Bots
@@ -2199,18 +2217,28 @@ class PostgreSQLDatabase(Database):
             
     async def get_rp_bots(self, limit: int = 50, offset: int = 0, search_query: Optional[str] = None) -> List[RpBot]:
         pool = await self._get_pool()
+        base_query = """
+            SELECT b.*, u.username as creator_name 
+            FROM rp_bots b 
+            LEFT JOIN rp_users u ON b.creator_id = u.id
+        """
         async with pool.acquire() as conn:
             if search_query:
                 q = f"%{search_query}%"
-                rows = await conn.fetch("SELECT * FROM rp_bots WHERE name ILIKE $1 OR tags ILIKE $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3", q, limit, offset)
+                rows = await conn.fetch(f"{base_query} WHERE b.name ILIKE $1 OR b.tags ILIKE $1 ORDER BY b.created_at DESC LIMIT $2 OFFSET $3", q, limit, offset)
             else:
-                rows = await conn.fetch("SELECT * FROM rp_bots ORDER BY created_at DESC LIMIT $1 OFFSET $2", limit, offset)
+                rows = await conn.fetch(f"{base_query} ORDER BY b.created_at DESC LIMIT $1 OFFSET $2", limit, offset)
             return [self._row_to_rp_bot(row) for row in rows]
             
     async def get_rp_bot_by_id(self, id: str) -> Optional[RpBot]:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT * FROM rp_bots WHERE id = $1", id)
+            row = await conn.fetchrow("""
+                SELECT b.*, u.username as creator_name 
+                FROM rp_bots b 
+                LEFT JOIN rp_users u ON b.creator_id = u.id 
+                WHERE b.id = $1
+            """, id)
             return self._row_to_rp_bot(row) if row else None
             
     async def update_rp_bot(self, id: str, name: str, avatar: Optional[str], description: Optional[str], lore: Optional[str], personality: Optional[str], tags: Optional[str]) -> bool:

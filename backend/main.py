@@ -2854,3 +2854,9 @@ async def admin_bulk_model_action(
 
 # --- LizRP Router Integration ---
 app.include_router(rp_router)
+
+# --- Asset Mounting ---
+# Mount the assets folder explicitly so icons/images are accessible via /assets/
+assets_path = FRONTEND_DIR / "assets"
+if assets_path.exists():
+    app.mount("/assets", StaticFiles(directory=str(assets_path)), name="assets")
