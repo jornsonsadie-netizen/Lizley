@@ -1123,3 +1123,9 @@ function loadTheme() {
         document.documentElement.setAttribute('data-theme', savedTheme);
     }
 }
+
+// Initialize on page load
+document.addEventListener('DOMContentLoaded', () => {
+    loadTheme();
+    init();
+});
