@@ -34,57 +34,66 @@ def get_or_create_session_secret(
 
 def _get_or_create_sqlite(path: str) -> str:
     """SQLite: create app_settings table, get or create session_secret."""
-    conn = sqlite3.connect(path)
     try:
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT)"
-        )
-        row = conn.execute(
-            "SELECT value FROM app_settings WHERE key = ?", ("session_secret",)
-        ).fetchone()
-        if row and row[0]:
-            return row[0].strip()
-        secret = secrets.token_hex(32)
-        conn.execute(
-            "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)",
-            ("session_secret", secret),
-        )
-        conn.commit()
-        return secret
-    finally:
-        conn.close()
+        conn = sqlite3.connect(path, timeout=5)
+        try:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT)"
+            )
+            row = conn.execute(
+                "SELECT value FROM app_settings WHERE key = ?", ("session_secret",)
+            ).fetchone()
+            if row and row[0]:
+                return row[0].strip()
+            secret = secrets.token_hex(32)
+            conn.execute(
+                "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)",
+                ("session_secret", secret),
+            )
+            conn.commit()
+            return secret
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"[Warning] SQLite session secret error at {path}: {e}")
+        return secrets.token_hex(32)
 
 
 def _get_or_create_postgres(url: str) -> str:
     """PostgreSQL: create app_settings table, get or create session_secret."""
     try:
-        import psycopg2
-    except ImportError:
-        # Fallback: no psycopg2, use random (session won't persist across restarts; cookie auth still works)
-        return secrets.token_hex(32)
-    conn = psycopg2.connect(url)
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS app_settings (
-                    key TEXT PRIMARY KEY,
-                    value TEXT
+        try:
+            import psycopg2
+        except ImportError:
+            # Fallback: no psycopg2, use random
+            return secrets.token_hex(32)
+            
+        conn = psycopg2.connect(url, connect_timeout=5)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS app_settings (
+                        key TEXT PRIMARY KEY,
+                        value TEXT
+                    )
+                    """
                 )
-                """
-            )
-            cur.execute(
-                "SELECT value FROM app_settings WHERE key = %s", ("session_secret",)
-            )
-            row = cur.fetchone()
-            if row and row[0]:
-                return row[0].strip()
-            secret = secrets.token_hex(32)
-            cur.execute(
-                "INSERT INTO app_settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-                ("session_secret", secret),
-            )
-        conn.commit()
-        return secret
-    finally:
-        conn.close()
+                cur.execute(
+                    "SELECT value FROM app_settings WHERE key = %s", ("session_secret",)
+                )
+                row = cur.fetchone()
+                if row and row[0]:
+                    return row[0].strip()
+                secret = secrets.token_hex(32)
+                cur.execute(
+                    "INSERT INTO app_settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                    ("session_secret", secret),
+                )
+            conn.commit()
+            return secret
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"[Warning] PostgreSQL session secret error: {e}")
+        return secrets.token_hex(32)

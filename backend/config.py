@@ -71,9 +71,9 @@ def load_settings(env_path: Optional[str] = None) -> Settings:
     if database_url:
         database_url = database_url.strip()
     
-    # Abuse protection: max API keys per IP (default 2)
-    max_keys_per_ip = int(os.getenv("MAX_KEYS_PER_IP", "2").strip())
-    max_keys_per_ip = max(1, min(max_keys_per_ip, 20))  # Clamp 1–20
+    # Abuse protection: max API keys per IP (default 20)
+    max_keys_per_ip = int(os.getenv("MAX_KEYS_PER_IP", "20").strip())
+    max_keys_per_ip = max(1, min(max_keys_per_ip, 100))  # Relax clamp to 1–100
     
     return Settings(
         admin_password=admin_password,

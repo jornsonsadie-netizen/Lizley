@@ -1044,8 +1044,10 @@ async def get_key_for_request(
     
     # 1. Try fingerprint-based lookup (most specific)
     if fingerprint:
+        print(f"[Auth] Checking fingerprint: {fingerprint[:12]}...")
         key_record = await db.get_key_by_fingerprint(fingerprint)
         if key_record:
+            print(f"[Auth] Fingerprint match found for key: {key_record.key_prefix}")
             # If IP changed but fingerprint matched, update IP for this key
             if key_record.ip_address != client_ip:
                 print(f"[Auth] IP migration: Key {key_record.key_prefix} moved to {client_ip} (Fingerprint match)")
@@ -1129,9 +1131,11 @@ async def generate_key_endpoint(
         )
     
     # Abuse protection: limit keys per IP
-    max_keys = (settings.max_keys_per_ip if settings else 2)
+    # Increase default to 50 to accommodate shared networks/proxies/mobile users
+    max_keys = (settings.max_keys_per_ip if settings else 50)
     key_count = await db.count_keys_by_ip(client_ip)
     if key_count >= max_keys:
+        print(f"[Auth] Rate limit reached for IP {client_ip}: {key_count}/{max_keys}")
         # Before rejecting, clean up any disabled (pending/rejected) keys for this IP
         # to free up slots for legitimate new users on shared IPs
         cleaned = await db.delete_disabled_keys_by_ip(client_ip)
