@@ -687,6 +687,10 @@ class SQLiteDatabase(Database):
     async def log_usage(self, key_id: int, model: str, tokens: int, success: bool,
                        ip_address: Optional[str] = None, input_tokens: int = 0,
                        output_tokens: int = 0, error_message: Optional[str] = None) -> None:
+        # Skip logging for synthetic/whitelisted keys (-1) to avoid foreign key violations
+        if key_id < 0:
+            return
+            
         conn = await self._get_connection()
         await conn.execute(
             "INSERT INTO usage_logs (api_key_id, ip_address, model, input_tokens, output_tokens, tokens_used, success, error_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1318,6 +1322,10 @@ class PostgreSQLDatabase(Database):
     async def log_usage(self, key_id: int, model: str, tokens: int, success: bool,
                        ip_address: Optional[str] = None, input_tokens: int = 0,
                        output_tokens: int = 0, error_message: Optional[str] = None) -> None:
+        # Skip logging for synthetic/whitelisted keys (-1) to avoid foreign key violations
+        if key_id < 0:
+            return
+            
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             await conn.execute(

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Optional, Tuple, AsyncGenerator, List, Dict, Any
 
 import httpx
+import codecs
 from fastapi import FastAPI, Request, HTTPException, Depends, Header, Response, Cookie
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse, RedirectResponse
@@ -1378,6 +1379,32 @@ async def proxy_chat_completions(
         The chat completion response from the target API.
     """
     try:
+        # TIGHT WRAP: Ensure ABSOLUTELY NO unhandled exceptions reach the top level.
+        # This catch-all handles issues in dependencies or early logic.
+        return await _proxy_chat_completions_impl(request, chat_request, key_data)
+    except HTTPException:
+        raise
+    except BaseException as e:
+        import traceback
+        print(f"[Critical Error] Top-level crash in proxy_chat_completions: {e}")
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "message": f"A critical internal server error occurred: {str(e)}",
+                    "type": "internal_error",
+                    "code": 500
+                }
+            }
+        )
+
+async def _proxy_chat_completions_impl(
+    request: Request,
+    chat_request: ChatCompletionRequest,
+    key_data: Tuple[ApiKeyRecord, str],
+):
+    try:
         key_record, client_ip = key_data
 
         # Ensure counters are fresh (reset if past day boundary)
@@ -1621,11 +1648,16 @@ async def _handle_streaming_request(
                 await db.increment_rpd_only(key_record.id)
                 
                 # True streaming - forward each chunk immediately
+                decoder = codecs.getincrementaldecoder("utf-8")()
                 async for chunk in response.aiter_bytes():
                     # Count tokens in this chunk for TPS limiting
                     chunk_tokens = 0
                     try:
-                        chunk_str = chunk.decode('utf-8')
+                        chunk_str = decoder.decode(chunk, final=False)
+                        if not chunk_str:
+                            continue
+                            
+                        # Process each line in the decoded string
                         for line in chunk_str.split('\n'):
                             if line.startswith('data: ') and line != 'data: [DONE]':
                                 data_str = line[6:]
