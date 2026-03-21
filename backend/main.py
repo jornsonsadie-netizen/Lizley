@@ -1381,12 +1381,61 @@ async def proxy_chat_completions(
     csam_warning = await screen_for_csam(messages=chat_request.messages)
     
     if csam_warning:
-        # Inject the violation warning as a system message so the main model refuses
-        chat_request.messages.insert(0, ChatMessage(
-            role="system",
-            content=csam_warning,
-        ))
-        print(f"[CSAM Detector] Violation detected — warning injected for key {key_record.key_prefix}")
+        # Block the request entirely — do NOT forward to the main model.
+        # Return a fake OpenAI-compatible response with the violation message.
+        print(f"[CSAM Detector] Violation detected — request BLOCKED for key {key_record.key_prefix}")
+        import time, uuid
+        blocked_response = {
+            "id": f"chatcmpl-blocked-{uuid.uuid4().hex[:12]}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": chat_request.model,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": csam_warning,
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        }
+        
+        # If the client requested streaming, wrap it in SSE format
+        if chat_request.stream:
+            import json as json_lib
+            
+            async def blocked_stream():
+                chunk = {
+                    "id": blocked_response["id"],
+                    "object": "chat.completion.chunk",
+                    "created": blocked_response["created"],
+                    "model": chat_request.model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"role": "assistant", "content": csam_warning},
+                            "finish_reason": None,
+                        }
+                    ],
+                }
+                yield f"data: {json_lib.dumps(chunk)}\n\n"
+                # Send the final [DONE] marker
+                done_chunk = {
+                    "id": blocked_response["id"],
+                    "object": "chat.completion.chunk",
+                    "created": blocked_response["created"],
+                    "model": chat_request.model,
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                }
+                yield f"data: {json_lib.dumps(done_chunk)}\n\n"
+                yield "data: [DONE]\n\n"
+            
+            return StreamingResponse(blocked_stream(), media_type="text/event-stream")
+        
+        return JSONResponse(content=blocked_response)
     
     # Get target API config
     target_url, target_key = await get_target_api_config()
