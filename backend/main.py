@@ -394,6 +394,67 @@ def get_client_ip(request: Request) -> str:
     return "unknown"
 
 
+async def ensure_usage_reset(key_record: ApiKeyRecord, database: "Database") -> ApiKeyRecord:
+    """Check and reset RPM/RPD counters if their windows have expired.
+    
+    This ensures that usage data is accurate when viewed, even if no requests
+    have been made yet today.
+    
+    Returns:
+    (Possibly modified) ApiKeyRecord with reset counters.
+    """
+    now = datetime.now(timezone.utc)
+    updated = False
+    
+    current_rpm = key_record.current_rpm
+    current_rpd = key_record.current_rpd
+    last_rpm_reset = key_record.last_rpm_reset
+    last_rpd_reset = key_record.last_rpd_reset
+
+    # Fix timezone info if missing (SQLite legacy)
+    if last_rpm_reset.tzinfo is None:
+        last_rpm_reset = last_rpm_reset.replace(tzinfo=timezone.utc)
+    if last_rpd_reset.tzinfo is None:
+        last_rpd_reset = last_rpd_reset.replace(tzinfo=timezone.utc)
+
+    # Check RPM reset
+    if (now - last_rpm_reset).total_seconds() >= RPM_WINDOW_SECONDS:
+        await database.reset_rpm(key_record.id)
+        current_rpm = 0
+        last_rpm_reset = now
+        updated = True
+
+    # Check RPD reset
+    if now.date() > last_rpd_reset.date():
+        await database.reset_rpd(key_record.id)
+        current_rpd = 0
+        last_rpd_reset = now
+        updated = True
+
+    if updated:
+        # Return a copy with new values to avoid stale reads in the same request
+        return ApiKeyRecord(
+            id=key_record.id,
+            key_hash=key_record.key_hash,
+            key_prefix=key_record.key_prefix,
+            full_key=key_record.full_key,
+            discord_id=key_record.discord_id,
+            discord_email=key_record.discord_email,
+            ip_address=key_record.ip_address,
+            browser_fingerprint=key_record.browser_fingerprint,
+            rp_application=key_record.rp_application,
+            current_rpm=current_rpm,
+            current_rpd=current_rpd,
+            last_rpm_reset=last_rpm_reset,
+            last_rpd_reset=last_rpd_reset,
+            enabled=key_record.enabled,
+            bypass_ip_ban=key_record.bypass_ip_ban,
+            created_at=key_record.created_at,
+            last_used_at=key_record.last_used_at
+        )
+    return key_record
+
+
 async def check_rate_limits(
     key_record: ApiKeyRecord,
     database: "Database",
@@ -402,44 +463,25 @@ async def check_rate_limits(
     """Check rate limits for an API key.
     
     Enforces RPM (requests per minute) and daily token quota (REQUESTS_PER_DAY_LIMIT).
-    This function ONLY performs the check and does NOT increment counters.
+    This function performs resets if needed via ensure_usage_reset.
     
     Args:
         key_record: The API key record to check.
         database: The database instance for updating counters.
-        estimated_tokens: Estimated tokens for this request (input + max output); used for daily token check.
+        estimated_tokens: Estimated tokens for this request (unused currently but kept for legacy).
     
     Returns:
         RateLimitResult indicating whether the request is allowed and any
         rate limit information.
     """
+    # Ensure counters are fresh before checking
+    key_record = await ensure_usage_reset(key_record, database)
+    
     now = datetime.now(timezone.utc)
-    
-    # Get current counter values (may be reset below)
-    current_rpm = key_record.current_rpm
-    current_rpd = key_record.current_rpd
-    
-    # Check if RPM needs to be reset (60+ seconds since last reset)
-    last_rpm_reset = key_record.last_rpm_reset
-    if last_rpm_reset.tzinfo is None:
-        last_rpm_reset = last_rpm_reset.replace(tzinfo=timezone.utc)
-    
-    seconds_since_rpm_reset = (now - last_rpm_reset).total_seconds()
-    if seconds_since_rpm_reset >= RPM_WINDOW_SECONDS:
-        await database.reset_rpm(key_record.id)
-        current_rpm = 0
-    
-    # Check if RPD counter needs to be reset (new calendar day in UTC)
-    last_rpd_reset = key_record.last_rpd_reset
-    if last_rpd_reset.tzinfo is None:
-        last_rpd_reset = last_rpd_reset.replace(tzinfo=timezone.utc)
-    
-    if now.date() > last_rpd_reset.date():
-        await database.reset_rpd(key_record.id)
-        current_rpd = 0
-    
+    seconds_since_rpm_reset = (now - key_record.last_rpm_reset.replace(tzinfo=timezone.utc) if key_record.last_rpm_reset.tzinfo is None else key_record.last_rpm_reset).total_seconds()
+
     # Check RPM limit
-    if current_rpm >= RPM_LIMIT:
+    if key_record.current_rpm >= RPM_LIMIT:
         retry_after = max(1, int(RPM_WINDOW_SECONDS - seconds_since_rpm_reset))
         return RateLimitResult(
             allowed=False,
@@ -447,8 +489,8 @@ async def check_rate_limits(
             retry_after=retry_after,
         )
     
-    # Check daily token limit (tokens per day, not request count)
-    if current_rpd >= REQUESTS_PER_DAY_LIMIT:
+    # Check daily request limit
+    if key_record.current_rpd >= REQUESTS_PER_DAY_LIMIT:
         midnight_utc = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
         retry_after = int((midnight_utc - now).total_seconds())
         return RateLimitResult(
@@ -459,8 +501,8 @@ async def check_rate_limits(
     
     return RateLimitResult(
         allowed=True,
-        new_rpm=current_rpm,
-        new_rpd=current_rpd,
+        new_rpm=key_record.current_rpm,
+        new_rpd=key_record.current_rpd,
     )
 
 
@@ -1166,12 +1208,15 @@ async def get_my_key(
             # This happens on shared proxy IPs. We MUST NOT return this key to the wrong user.
             print(f"[Auth] Shared IP conflict: IP {client_ip} has key {key_record.key_prefix} (FP: {key_record.browser_fingerprint}) but requester has FP: {fingerprint}. ACCESS DENIED.")
             key_record = None # Force 404/Generate view
-
+    
     if not key_record:
         raise HTTPException(
             status_code=404,
             detail="No API key found for your device. Please generate a new one."
         )
+    
+    # Ensure counters are fresh (reset if past day boundary)
+    key_record = await ensure_usage_reset(key_record, db)
     
     # Tokens used today (UTC day) for display
     now = datetime.now(timezone.utc)
@@ -1215,28 +1260,12 @@ async def get_my_usage(
             detail="No API key found for your IP address"
         )
     
-    # Check if rate limits need to be reset (without incrementing)
+    # Ensure counters are fresh (reset if past day boundary)
+    key_record = await ensure_usage_reset(key_record, db)
+    
     now = datetime.now(timezone.utc)
     current_rpm = key_record.current_rpm
     current_rpd = key_record.current_rpd
-    
-    # Check if RPM needs to be reset
-    last_rpm_reset = key_record.last_rpm_reset
-    if last_rpm_reset.tzinfo is None:
-        last_rpm_reset = last_rpm_reset.replace(tzinfo=timezone.utc)
-    
-    if (now - last_rpm_reset).total_seconds() >= RPM_WINDOW_SECONDS:
-        await db.reset_rpm(key_record.id)
-        current_rpm = 0
-    
-    # Check if RPD needs to be reset
-    last_rpd_reset = key_record.last_rpd_reset
-    if last_rpd_reset.tzinfo is None:
-        last_rpd_reset = last_rpd_reset.replace(tzinfo=timezone.utc)
-    
-    if now.date() > last_rpd_reset.date():
-        await db.reset_rpd(key_record.id)
-        current_rpd = 0
     
     # Tokens used today (UTC day) for daily quota display
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -1362,6 +1391,9 @@ async def proxy_chat_completions(
         The chat completion response from the target API.
     """
     key_record, client_ip = key_data
+
+    # Ensure counters are fresh (reset if past day boundary)
+    key_record = await ensure_usage_reset(key_record, db)
     
     # Check if model is disabled
     excluded_models = await db.get_excluded_models()
@@ -1766,6 +1798,13 @@ async def admin_list_keys(
     
     result = []
     for key in keys:
+        # Skip whitelisted admin key if it appears
+        if key.id == -1:
+            continue
+            
+        # Ensure counter is fresh (reset if past day boundary)
+        key = await ensure_usage_reset(key, db)
+        
         try:
             tokens_today = tokens_map.get(key.id, 0)
             result.append(AdminKeyResponse(
