@@ -12,20 +12,14 @@ const REFRESH_INTERVAL = 3000; // 3 seconds
 let adminPassword = null;
 let refreshInterval = null;
 let consoleMessages = [];
-let currentFlags = []; // Store current flags for bulk actions
 const MAX_CONSOLE_MESSAGES = 50;
 
 // Render Cache (Prevents jitter/scroll resets on auto-refresh)
-let lastFlagsJson = '';
 let lastKeysJson = '';
 let lastLogsJson = '';
 let lastTopJson = '';
 let lastBannedJson = '';
 let lastModelsJson = '';
-
-// UX state for flags scrolling (prevents auto-refresh jitter while reviewing long flagged content)
-let lastFlagsInteractionAt = 0;
-const FLAGS_INTERACTION_COOLDOWN_MS = 5000;
 
 // DOM Elements
 const passwordModal = document.getElementById('password-modal');
@@ -78,20 +72,6 @@ function init() {
     // Start UTC time update
     updateUtcTime();
     setInterval(updateUtcTime, 1000);
-    // Track interaction with the flags area so auto-refresh doesn't fight scrolling
-    const flagsContainer = document.getElementById('flags-container');
-    if (flagsContainer) {
-        const markFlagsInteraction = () => {
-            lastFlagsInteractionAt = Date.now();
-        };
-
-        flagsContainer.addEventListener('wheel', markFlagsInteraction, { passive: true });
-        flagsContainer.addEventListener('touchstart', markFlagsInteraction, { passive: true });
-        flagsContainer.addEventListener('touchmove', markFlagsInteraction, { passive: true });
-        flagsContainer.addEventListener('pointerdown', markFlagsInteraction);
-        flagsContainer.addEventListener('keydown', markFlagsInteraction);
-        flagsContainer.addEventListener('scroll', markFlagsInteraction, { passive: true });
-    }
 }
 
 /**
@@ -253,7 +233,6 @@ function startAutoRefresh() {
         loadBannedIps(true);
         loadRequestLogs(true);
         loadTopRequests(true);
-        loadFlags(true);
         loadModels(true);
     }, REFRESH_INTERVAL);
 }
@@ -278,7 +257,6 @@ async function loadAllData() {
         loadBannedIps(),
         loadRequestLogs(),
         loadTopRequests(),
-        loadFlags(),
         loadModels()
     ]);
 }
@@ -1151,272 +1129,20 @@ function loadTheme() {
 }
 
 
-// ===================================
-// Content Moderation Flags
-// ===================================
 
-async function loadFlags(silent = false) {
-    const container = document.getElementById('flags-container');
-    const section = document.getElementById('flags-section');
-    const noFlagsMessage = document.getElementById('no-flags-message');
-    const countEl = document.getElementById('flags-count');
-    const showReviewed = document.getElementById('show-reviewed-flags')?.checked || false;
 
-    if (!container || !section) return;
 
-    // Avoid re-rendering while admin is actively scrolling/reading flagged content
-    if (silent && (Date.now() - lastFlagsInteractionAt) < FLAGS_INTERACTION_COOLDOWN_MS) {
-        return;
-    }
 
-    // Always show the flags section so admin can see it
-    section.classList.remove('hidden');
 
-    if (!silent) {
-        container.innerHTML = '<div class="loading-cell">Loading...</div>';
-    }
-
-    try {
-        const response = await adminFetch(`/admin/flags?include_reviewed=${showReviewed}`);
-
-        if (response.ok) {
-            const flags = await response.json();
-
-            // Optimization: Only update DOM if flags have actually changed
-            // This prevents "jumping" and scroll reset every 3 seconds
-            const flagsJson = JSON.stringify(flags);
-            if (lastFlagsJson === flagsJson) {
-                return;
-            }
-            lastFlagsJson = flagsJson;
-
-            currentFlags = flags; // Save for bulk actions
-            displayFlags(flags);
-
-            if (countEl) {
-                const unreviewedCount = flags.filter(f => !f.reviewed).length;
-                countEl.textContent = unreviewedCount > 0 ? `${unreviewedCount} unreviewed` : 'None';
-            }
-        } else if (response.status === 401) {
-            logout();
-        } else if (!silent) {
-            logToConsole('Failed to load content flags', 'error');
-        }
-    } catch (error) {
-        if (!silent) {
-            logToConsole(`Flags error: ${error.message}`, 'error');
-        }
-    }
-}
-
-function displayFlags(flags) {
-    const container = document.getElementById('flags-container');
-    const noFlagsMessage = document.getElementById('no-flags-message');
-
-    if (!container) return;
-
-    if (!flags || flags.length === 0) {
-        container.innerHTML = '';
-        if (noFlagsMessage) noFlagsMessage.classList.remove('hidden');
-        return;
-    }
-
-    if (noFlagsMessage) noFlagsMessage.classList.add('hidden');
-
-    // Preserve per-card preview scroll positions to prevent scroll jumping on refresh
-    const previewScrollMap = new Map();
-    container.querySelectorAll('.flag-card[data-flag-id]').forEach((card) => {
-        const id = card.getAttribute('data-flag-id');
-        const preview = card.querySelector('.flag-content-preview');
-        if (id && preview) {
-            previewScrollMap.set(id, preview.scrollTop);
-        }
-    });
-
-    const previousWindowScrollY = window.scrollY;
-
-    container.innerHTML = flags.map(flag => `
-        <div class="flag-card ${flag.reviewed ? 'reviewed' : ''} severity-${flag.severity}" data-flag-id="${flag.id}">
-            <div class="flag-card-header">
-                <div class="flag-info">
-                    <span class="flag-type-badge ${flag.flag_type}">${escapeHtml(flag.flag_type.toUpperCase())}</span>
-                    <span class="flag-severity-badge ${flag.severity}">${escapeHtml(flag.severity)}</span>
-                </div>
-                <span class="flag-time">${formatTime(flag.flagged_at)}</span>
-            </div>
-            <div class="flag-card-body">
-                <div class="flag-user-info">
-                    <strong>User:</strong> ${escapeHtml(flag.discord_email || flag.discord_id || 'Unknown')}
-                </div>
-                <div class="flag-key-info">
-                    <strong>Key:</strong> ${escapeHtml(flag.key_prefix)} | <strong>IP:</strong> ${escapeHtml(flag.ip_address)}
-                </div>
-                <div class="flag-model-info">
-                    <strong>Model:</strong> ${escapeHtml(flag.model)}
-                </div>
-                <div class="flag-preview">
-                    <strong>Flagged Content:</strong>
-                    <pre class="flag-content-preview">${escapeHtml(flag.message_preview) || '<span class="empty-preview">(No flagged text content)</span>'}</pre>
-                </div>
-            </div>
-            ${flag.reviewed ? `
-                <div class="flag-reviewed-info">
-                    <span class="reviewed-badge">✓ Reviewed</span>
-                    <span class="action-taken">${escapeHtml(flag.action_taken || 'No action')}</span>
-                </div>
-            ` : `
-                <div class="flag-card-actions">
-                    <button onclick="flagAction(${flag.id}, 'ban_and_disable')" class="btn btn-ban-user" title="Ban this user's IP and disable their key">
-                        🚫 Ban User
-                    </button>
-                    <button onclick="flagAction(${flag.id}, 'ban_ip')" class="btn btn-warning btn-sm" title="Ban IP only">
-                        Ban IP
-                    </button>
-                    <button onclick="flagAction(${flag.id}, 'disable_key')" class="btn btn-warning btn-sm" title="Disable key only">
-                        Disable Key
-                    </button>
-                    <button onclick="flagAction(${flag.id}, 'dismiss')" class="btn btn-ghost btn-sm" title="Dismiss without action">
-                        Dismiss
-                    </button>
-                </div>
-            `}
-        </div>
-    `).join('');
-
-    // Restore preview scroll position for unchanged flag cards
-    container.querySelectorAll('.flag-card[data-flag-id]').forEach((card) => {
-        const id = card.getAttribute('data-flag-id');
-        const preview = card.querySelector('.flag-content-preview');
-        if (id && preview && previewScrollMap.has(id)) {
-            preview.scrollTop = previewScrollMap.get(id);
-        }
-    });
-
-    // Mark interaction when scrolling inside per-flag drawers/previews.
-    // (scroll doesn't bubble, so container-level listeners won't catch this)
-    const markFlagsInteraction = () => {
-        lastFlagsInteractionAt = Date.now();
-    };
-    container.querySelectorAll('.flag-content-preview').forEach((preview) => {
-        preview.addEventListener('touchstart', markFlagsInteraction, { passive: true });
-        preview.addEventListener('touchmove', markFlagsInteraction, { passive: true });
-        preview.addEventListener('wheel', markFlagsInteraction, { passive: true });
-        preview.addEventListener('scroll', markFlagsInteraction, { passive: true });
-    });
-
-    // Keep viewport stable if a background refresh happened while scrolling
-    if (Math.abs(window.scrollY - previousWindowScrollY) > 2) {
-        requestAnimationFrame(() => window.scrollTo(0, previousWindowScrollY));
-    }
-}
-
-async function flagAction(flagId, action) {
-    const actionLabels = {
-        'ban_ip': 'ban this IP',
-        'disable_key': 'disable this API key',
-        'ban_and_disable': 'ban the IP AND disable the key',
-        'dismiss': 'dismiss this flag without action',
-        'warn': 'mark as warned'
-    };
-
-    if (!confirm(`Are you sure you want to ${actionLabels[action] || action}?`)) return;
-
-    try {
-        const response = await adminFetch(`/admin/flags/${flagId}/action`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action })
-        });
-
-        if (response.ok) {
-            const data = await response.json();
-            logToConsole(`Flag action: ${data.message}`, 'success');
-            showAdminStatus(data.message, 'success');
-            await loadFlags(),
-        loadModels();
-            // Also refresh banned IPs if we banned someone
-            if (action === 'ban_ip' || action === 'ban_and_disable') {
-                await loadBannedIps();
-            }
-            // Refresh keys if we disabled one
-            if (action === 'disable_key' || action === 'ban_and_disable') {
-                await loadKeys();
-            }
-        } else if (response.status === 401) {
-            logout();
-        } else if (response.status === 404) {
-            logToConsole('Flag not found', 'error');
-            await loadFlags(),
-        loadModels();
-        } else {
-            const data = await response.json().catch(() => ({}));
-            logToConsole(`Flag action failed: ${data.detail || 'Unknown error'}`, 'error');
-            showAdminStatus(data.detail || 'Failed to process flag action', 'error');
-        }
-    } catch (error) {
-        logToConsole(`Flag action error: ${error.message}`, 'error');
-        showAdminStatus('Network error processing flag action', 'error');
-    }
-}
-
-async function bulkFlagAction(action) {
-    const unreviewed = currentFlags.filter(f => !f.reviewed);
-    if (unreviewed.length === 0) {
-        showAdminStatus('No unreviewed flags to act on', 'info');
-        return;
-    }
-
-    const actionLabels = {
-        'ban_ip': 'ban ALL unreviewed IPs',
-        'disable_key': 'disable ALL unreviewed API keys',
-        'ban_and_disable': 'ban and disable ALL unreviewed users',
-        'dismiss': 'dismiss ALL unreviewed flags'
-    };
-
-    if (!confirm(`Are you sure you want to ${actionLabels[action] || action} (${unreviewed.length} total)?`)) return;
-
-    const flagIds = unreviewed.map(f => f.id);
-
-    try {
-        logToConsole(`Bulk action '${action}' started for ${flagIds.length} flags...`, 'info');
-
-        const response = await adminFetch('/admin/flags/bulk-action', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                flag_ids: flagIds,
-                action: action,
-                reason: `Bulk ${action} from Admin Dashboard`
-            })
-        });
-
-        if (response.ok) {
-            const data = await response.json();
-            logToConsole(data.message, 'success');
-            showAdminStatus(data.message, 'success');
-            await loadFlags();
-            await loadModels();
-            // Refresh other lists if needed
-            if (action.includes('ban')) await loadBannedIps();
-            if (action.includes('disable') || action.includes('ban')) await loadKeys();
-        } else if (response.status === 401) {
-            logout();
-        } else {
-            const data = await response.json().catch(() => ({}));
-            logToConsole(`Bulk action failed: ${data.message || 'Unknown error'}`, 'error');
-            showAdminStatus(data.message || 'Failed to process bulk action', 'error');
-        }
-    } catch (error) {
-        logToConsole(`Bulk action error: ${error.message}`, 'error');
-        showAdminStatus('Network error processing bulk action', 'error');
-    }
-}
 
 
 
 // ===================================
 // Model Management
 // ===================================
+
+
+
 
 async function loadModels(silent = false) {
     if (!modelsTbody) {
