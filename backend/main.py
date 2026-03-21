@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from urllib.parse import quote
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Optional, Tuple, AsyncGenerator, List, Dict
+from typing import Optional, Tuple, AsyncGenerator, List, Dict, Any
 
 import httpx
 from fastapi import FastAPI, Request, HTTPException, Depends, Header, Response, Cookie
@@ -256,7 +256,7 @@ class RateLimitErrorResponse(BaseModel):
 class ChatMessage(BaseModel):
     """A single chat message."""
     role: str
-    content: str
+    content: Optional[Any] = ""
 
 
 class ChatCompletionRequest(BaseModel):
@@ -659,8 +659,7 @@ def count_tokens(messages: list[ChatMessage]) -> int:
     """Estimate the token count for a list of messages.
     
     Uses a simple heuristic: approximately 4 characters per token.
-    This is a rough estimate and may not match the exact tokenization
-    used by the target API.
+    Handles both string content and multi-modal content lists.
     
     Args:
         messages: List of chat messages.
@@ -671,8 +670,24 @@ def count_tokens(messages: list[ChatMessage]) -> int:
     total_chars = 0
     for message in messages:
         # Count role and content
-        total_chars += len(message.role)
-        total_chars += len(message.content)
+        role = str(message.role or "")
+        
+        # content can be a string or a list of content parts (e.g. for vision)
+        content_str = ""
+        if isinstance(message.content, str):
+            content_str = message.content
+        elif isinstance(message.content, list):
+            # Extract text from content parts
+            for part in message.content:
+                if isinstance(part, dict):
+                    content_str += str(part.get("text", ""))
+                else:
+                    content_str += str(part)
+        else:
+            content_str = str(message.content or "")
+            
+        total_chars += len(role)
+        total_chars += len(content_str)
         # Add overhead for message structure (approximately 4 tokens per message)
         total_chars += 16
     
@@ -703,10 +718,24 @@ async def screen_for_csam(
     # Build the screening payload: system prompt + user messages only
     user_content_parts = []
     for msg in messages:
-        role = (msg.role or "").lower()
-        content = (msg.content or "").strip()
-        if content:
-            user_content_parts.append(f"{role}: {content}")
+        role = str(msg.role or "user").lower()
+        
+        # Handle both string content and multi-modal lists
+        content_text = ""
+        if isinstance(msg.content, str):
+            content_text = msg.content
+        elif isinstance(msg.content, list):
+            for part in msg.content:
+                if isinstance(part, dict):
+                    content_text += str(part.get("text", ""))
+                else:
+                    content_text += str(part)
+        else:
+            content_text = str(msg.content or "")
+            
+        content_text = content_text.strip()
+        if content_text:
+            user_content_parts.append(f"{role}: {content_text}")
     
     if not user_content_parts:
         return None
@@ -1345,115 +1374,126 @@ async def proxy_chat_completions(
     Returns:
         The chat completion response from the target API.
     """
-    key_record, client_ip = key_data
+    try:
+        key_record, client_ip = key_data
 
-    # Ensure counters are fresh (reset if past day boundary)
-    key_record = await ensure_usage_reset(key_record, db)
-    
-    # Check if model is disabled
-    excluded_models = await db.get_excluded_models()
-    if chat_request.model in excluded_models:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Model '{chat_request.model}' is currently disabled by administrator."
-        )
-    
-    # Input token count (for context check and rate-limit estimate)
-    token_count = count_tokens(chat_request.messages)
-    max_context = await get_max_context()
-    
-    if token_count > max_context:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Request exceeds maximum context limit of {max_context} tokens"
-        )
-    
-    # Check rate limits (proactive check only)
-    estimated_tokens = token_count + (await get_max_output_tokens())
-    rate_result = await check_rate_limits(key_record, db, estimated_tokens=estimated_tokens)
-    if not rate_result.allowed:
-        return create_rate_limit_response(rate_result)
-    
-    # Proactively increment RPM to prevent rapid-fire abuse
-    await db.increment_rpm_only(key_record.id)
-    
-    # CSAM / incest screening BEFORE forwarding to provider
-    csam_warning = await screen_for_csam(messages=chat_request.messages)
-    
-    if csam_warning:
-        # Block the request entirely — do NOT forward to the main model.
-        # Return a fake OpenAI-compatible response with the violation message.
-        print(f"[CSAM Detector] Violation detected — request BLOCKED for key {key_record.key_prefix}")
-        import time, uuid
-        blocked_response = {
-            "id": f"chatcmpl-blocked-{uuid.uuid4().hex[:12]}",
-            "object": "chat.completion",
-            "created": int(time.time()),
-            "model": chat_request.model,
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": csam_warning,
-                    },
-                    "finish_reason": "stop",
-                }
-            ],
-            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-        }
+        # Ensure counters are fresh (reset if past day boundary)
+        key_record = await ensure_usage_reset(key_record, db)
         
-        # If the client requested streaming, wrap it in SSE format
+        # Check if model is disabled
+        excluded_models = await db.get_excluded_models()
+        if chat_request.model in excluded_models:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Model '{chat_request.model}' is currently disabled by administrator."
+            )
+        
+        # Input token count (for context check and rate-limit estimate)
+        token_count = count_tokens(chat_request.messages)
+        max_context = await get_max_context()
+        
+        if token_count > max_context:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Request exceeds maximum context limit of {max_context} tokens"
+            )
+        
+        # Check rate limits (proactive check only)
+        estimated_tokens = token_count + (await get_max_output_tokens())
+        rate_result = await check_rate_limits(key_record, db, estimated_tokens=estimated_tokens)
+        if not rate_result.allowed:
+            return create_rate_limit_response(rate_result)
+        
+        # Proactively increment RPM to prevent rapid-fire abuse
+        await db.increment_rpm_only(key_record.id)
+        
+        # CSAM / incest screening BEFORE forwarding to provider
+        csam_warning = await screen_for_csam(messages=chat_request.messages)
+        
+        if csam_warning:
+            # Block the request entirely — do NOT forward to the main model.
+            # Return a fake OpenAI-compatible response with the violation message.
+            print(f"[CSAM Detector] Violation detected — request BLOCKED for key {key_record.key_prefix}")
+            import time, uuid
+            blocked_response = {
+                "id": f"chatcmpl-blocked-{uuid.uuid4().hex[:12]}",
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": chat_request.model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": csam_warning,
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            }
+            
+            # If the client requested streaming, wrap it in SSE format
+            if chat_request.stream:
+                import json as json_lib
+                
+                async def blocked_stream():
+                    chunk = {
+                        "id": blocked_response["id"],
+                        "object": "chat.completion.chunk",
+                        "created": blocked_response["created"],
+                        "model": chat_request.model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"role": "assistant", "content": csam_warning},
+                                "finish_reason": None,
+                            }
+                        ],
+                    }
+                    yield f"data: {json_lib.dumps(chunk)}\n\n"
+                    # Send the final [DONE] marker
+                    done_chunk = {
+                        "id": blocked_response["id"],
+                        "object": "chat.completion.chunk",
+                        "created": blocked_response["created"],
+                        "model": chat_request.model,
+                        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                    }
+                    yield f"data: {json_lib.dumps(done_chunk)}\n\n"
+                    yield "data: [DONE]\n\n"
+                
+                return StreamingResponse(blocked_stream(), media_type="text/event-stream")
+            
+            return JSONResponse(content=blocked_response)
+        
+        # Get target API config
+        target_url, target_key = await get_target_api_config()
+        
+        # Prepare request body
+        request_body = chat_request.model_dump(exclude_none=True)
+        
+        # Cap max_tokens (output limit) to prevent long completions draining quota
+        max_out = await get_max_output_tokens()
+        requested_max = request_body.get("max_tokens")
+        request_body["max_tokens"] = min(requested_max or max_out, max_out)
+        
+        # Log the request for debugging
+        print(f"[Proxy Request] Model: {request_body.get('model')}, Stream: {request_body.get('stream')}, Target: {target_url}")
+        
+        # Handle streaming response
         if chat_request.stream:
-            import json as json_lib
-            
-            async def blocked_stream():
-                chunk = {
-                    "id": blocked_response["id"],
-                    "object": "chat.completion.chunk",
-                    "created": blocked_response["created"],
-                    "model": chat_request.model,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {"role": "assistant", "content": csam_warning},
-                            "finish_reason": None,
-                        }
-                    ],
-                }
-                yield f"data: {json_lib.dumps(chunk)}\n\n"
-                # Send the final [DONE] marker
-                done_chunk = {
-                    "id": blocked_response["id"],
-                    "object": "chat.completion.chunk",
-                    "created": blocked_response["created"],
-                    "model": chat_request.model,
-                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-                }
-                yield f"data: {json_lib.dumps(done_chunk)}\n\n"
-                yield "data: [DONE]\n\n"
-            
-            return StreamingResponse(blocked_stream(), media_type="text/event-stream")
+            return await _handle_streaming_request(
+                target_url=target_url,
+                target_key=target_key,
+                request_body=request_body,
+                key_record=key_record,
+                token_count=token_count,
+                client_ip=client_ip,
+            )
         
-        return JSONResponse(content=blocked_response)
-    
-    # Get target API config
-    target_url, target_key = await get_target_api_config()
-    
-    # Prepare request body
-    request_body = chat_request.model_dump(exclude_none=True)
-    
-    # Cap max_tokens (output limit) to prevent long completions draining quota
-    max_out = await get_max_output_tokens()
-    requested_max = request_body.get("max_tokens")
-    request_body["max_tokens"] = min(requested_max or max_out, max_out)
-    
-    # Log the request for debugging
-    print(f"[Proxy Request] Model: {request_body.get('model')}, Stream: {request_body.get('stream')}, Target: {target_url}")
-    
-    # Handle streaming response
-    if chat_request.stream:
-        return await _handle_streaming_request(
+        # Handle non-streaming response
+        return await _handle_non_streaming_request(
             target_url=target_url,
             target_key=target_key,
             request_body=request_body,
@@ -1461,16 +1501,23 @@ async def proxy_chat_completions(
             token_count=token_count,
             client_ip=client_ip,
         )
-    
-    # Handle non-streaming response
-    return await _handle_non_streaming_request(
-        target_url=target_url,
-        target_key=target_key,
-        request_body=request_body,
-        key_record=key_record,
-        token_count=token_count,
-        client_ip=client_ip,
-    )
+    except HTTPException:
+        # Re-raise HTTP exceptions (e.g. from validate_api_key or rate limits)
+        raise
+    except Exception as e:
+        import traceback
+        print(f"[Critical Error] Unexpected crash in proxy_chat_completions: {e}")
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "message": f"An internal server error occurred: {str(e)}",
+                    "type": "internal_error",
+                    "code": 500
+                }
+            }
+        )
 
 
 async def _handle_streaming_request(
@@ -1705,16 +1752,44 @@ async def _handle_non_streaming_request(
             json=request_body,
         )
         
-        response_data = response.json()
+        # Safe JSON parsing
+        try:
+            response_data = response.json()
+        except Exception:
+            # Handle non-JSON responses (like HTML error pages from a proxy)
+            error_text = response.text[:500]
+            print(f"[Upstream Error] Non-JSON response ({response.status_code}): {error_text}")
+            
+            await db.log_usage(
+                key_id=key_record.id,
+                model=request_body.get("model", "unknown"),
+                tokens=token_count,
+                success=False,
+                ip_address=client_ip,
+                input_tokens=token_count,
+                error_message=f"Upstream returned non-JSON: {error_text}",
+            )
+            
+            return JSONResponse(
+                status_code=502 if response.status_code == 200 else response.status_code,
+                content={
+                    "error": {
+                        "message": "Upstream API returned an invalid response (non-JSON)",
+                        "type": "upstream_error",
+                        "code": response.status_code
+                    }
+                }
+            )
         
         # Extract actual token usage if available
         input_tokens = token_count
         output_tokens = 0
         actual_tokens = token_count
-        if "usage" in response_data:
-            input_tokens = response_data["usage"].get("prompt_tokens", token_count)
-            output_tokens = response_data["usage"].get("completion_tokens", 0)
-            actual_tokens = response_data["usage"].get("total_tokens", token_count)
+        if isinstance(response_data, dict) and "usage" in response_data:
+            usage = response_data["usage"]
+            input_tokens = usage.get("prompt_tokens", token_count)
+            output_tokens = usage.get("completion_tokens", 0)
+            actual_tokens = usage.get("total_tokens", token_count)
         
         # Log usage
         await db.log_usage(
