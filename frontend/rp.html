@@ -3,7 +3,7 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="description" content="LizRP - Roleplay with AI Models">
     <title>LizRP ✧ Hub</title>
 
@@ -18,34 +18,27 @@
 </head>
 
 <body>
-    <!-- Chat Wallpaper Background -->
+    <!-- Fixed Backgrounds -->
     <div id="rp-background" class="background-image"></div>
     <div class="vignette-overlay"></div>
 
-    <!-- Theme Toggle -->
-    <button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle dark mode" style="z-index: 1000;">
-        <span class="icon-sun">☀️</span>
-        <span class="icon-moon">🌙</span>
-    </button>
+    <!-- App Shell — full-screen fixed flex column -->
+    <div class="rp-app-shell">
 
-    <!-- Navigation Bar (Top Branding) -->
-    <nav class="navbar">
-        <div class="nav-brand-container">
+        <!-- Top Navbar (flex:0) -->
+        <nav class="navbar">
             <a href="/rp" class="nav-brand">✧ LizRP ✧</a>
-        </div>
-        <div class="nav-links desktop-only">
-            <a href="/" class="nav-link">Home</a>
-            <a href="/rp" class="nav-link rp-active-link">LizRP</a>
-        </div>
-        <div id="user-profile-menu-top" class="user-menu-top" style="display: flex; gap: 8px;">
-            <button class="btn btn-ghost btn-sm premium" onclick="showAdminAuth()">✧ Admin ✧</button>
-            <button id="auth-nav-btn" class="btn btn-ghost btn-sm" onclick="showView('profile')">Sign In</button>
-        </div>
-    </nav>
+            <div id="user-profile-menu-top" style="display: flex; gap: 6px; align-items: center;">
+                <button class="btn btn-ghost btn-sm premium" onclick="showAdminAuth()">✧ Admin ✧</button>
+                <button id="auth-nav-btn" class="btn btn-ghost btn-sm" onclick="showView('profile')">Sign In</button>
+                <button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle theme" style="margin-left:4px;">
+                    <span class="icon-sun">☀️</span>
+                    <span class="icon-moon">🌙</span>
+                </button>
+            </div>
+        </nav>
 
-    <!-- Main App Container -->
-    <div class="rp-container">
-        <!-- Main Content Area -->
+        <!-- Scrollable Content (flex:1) -->
         <main id="rp-main-content" class="rp-main">
             
             <!-- Tab: Home (Discovery Hub) -->
@@ -248,27 +241,28 @@
             </div>
 
         </main>
-        
-        <!-- Bottom Navigation Bar -->
+
+        <!-- Bottom Navigation Bar (flex:0) -->
         <nav class="bottom-nav">
-            <button class="nav-btn active" onclick="showView('home')" id="nav-home">
+            <button class="nav-btn active" id="nav-home">
                 <img src="/assets/home.png" class="nav-icon-img" alt="Home">
                 <span class="nav-text">Home</span>
             </button>
-            <button class="nav-btn" onclick="showView('create')" id="nav-create">
+            <button class="nav-btn" id="nav-create">
                 <img src="/assets/create.png" class="nav-icon-img" alt="Create">
                 <span class="nav-text">Create</span>
             </button>
-            <button class="nav-btn" onclick="showView('chats')" id="nav-chats">
+            <button class="nav-btn" id="nav-chats">
                 <img src="/assets/chats.png" class="nav-icon-img" alt="Chats">
                 <span class="nav-text">Chats</span>
             </button>
-            <button class="nav-btn" onclick="showView('profile')" id="nav-profile">
+            <button class="nav-btn" id="nav-profile">
                 <img src="/assets/profile.png" class="nav-icon-img" alt="Profile">
                 <span class="nav-text">Profile</span>
             </button>
         </nav>
-    </div>
+
+    </div><!-- end .rp-app-shell -->
 
     <!-- Modals -->
 

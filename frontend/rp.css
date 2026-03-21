@@ -1,29 +1,44 @@
 /* rp.css - LizRP Premium "Lizley" Aesthetic Styles */
 
 :root {
-    --rp-primary: #ff85a1; /* Sweet Pink */
+    --rp-primary: #ff85a1;
     --rp-primary-rgb: 255, 133, 161;
-    --rp-secondary: #a294cb; /* Soft Lavender */
-    --rp-accent: #fce4ec; /* Very Light Pink */
-    --rp-glass: rgba(18, 18, 22, 0.75);
-    --rp-glass-heavy: rgba(12, 12, 15, 0.85);
+    --rp-secondary: #a294cb;
+    --rp-accent: #fce4ec;
+    --rp-glass: rgba(18, 18, 22, 0.85);
+    --rp-glass-heavy: rgba(10, 10, 14, 0.92);
     --rp-glass-border: rgba(255, 255, 255, 0.1);
     --rp-text-main: #ffffff;
     --rp-text-dim: rgba(255, 255, 255, 0.6);
     --rp-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    --navbar-height: 64px;
+    --bottom-nav-height: 70px;
 }
 
-/* Base Body Overrides */
+/* ===== Base Reset ===== */
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+html, body {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+}
+
 body {
     background: #0a0a0c;
-    overflow: hidden;
     font-family: 'Outfit', 'Quicksand', sans-serif;
     color: var(--rp-text-main);
+    overflow: hidden; /* Body doesn't scroll — inner panels do */
 }
 
+/* ===== Fixed Backgrounds ===== */
 #rp-background {
     position: fixed;
-    top: 0; left: 0; right: 0; bottom: 0;
+    inset: 0;
     z-index: -2;
     background-size: cover;
     background-position: center;
@@ -33,48 +48,95 @@ body {
 
 .vignette-overlay {
     position: fixed;
-    top: 0; left: 0; right: 0; bottom: 0;
+    inset: 0;
     z-index: -1;
-    background: radial-gradient(circle, transparent 40%, rgba(0,0,0,0.6) 100%);
+    background: radial-gradient(circle, transparent 40%, rgba(0, 0, 0, 0.6) 100%);
     pointer-events: none;
 }
 
-/* ---------------- Layout & Container ---------------- */
-.rp-container {
+/* ===== App Shell — FIXED FULL SCREEN ===== */
+.rp-app-shell {
+    position: fixed;
+    inset: 0;
     display: flex;
     flex-direction: column;
-    height: 100vh;
-    width: 100%;
-    position: relative;
-    max-width: 600px; /* Centered narrow container for app feel on desktop */
+    max-width: 600px;
     margin: 0 auto;
     background: var(--rp-glass);
     backdrop-filter: blur(25px);
     -webkit-backdrop-filter: blur(25px);
     border-left: 1px solid var(--rp-glass-border);
     border-right: 1px solid var(--rp-glass-border);
-    box-shadow: 0 0 100px rgba(0,0,0,0.5);
+    box-shadow: 0 0 100px rgba(0, 0, 0, 0.5);
+    overflow: hidden; /* Children control their own scroll */
 }
 
 @media (max-width: 600px) {
-    .rp-container {
+    .rp-app-shell {
         max-width: 100%;
         border: none;
     }
 }
 
-.rp-main {
-    flex: 1;
-    position: relative;
-    overflow-y: auto;
-    padding-bottom: 80px; /* Space for bottom nav */
+/* ===== Top Navbar — FIXED INSIDE SHELL ===== */
+.rp-app-shell .navbar {
+    flex: 0 0 auto; /* Don't shrink */
+    height: var(--navbar-height);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 1rem;
+    background: rgba(10, 10, 14, 0.7);
+    border-bottom: 1px solid var(--rp-glass-border);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    z-index: 50;
 }
 
+.nav-brand {
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 1.4rem;
+    font-weight: 500;
+    color: var(--rp-primary);
+    text-decoration: none;
+    letter-spacing: 1px;
+    text-shadow: 0 0 15px rgba(255, 133, 161, 0.4);
+    white-space: nowrap;
+}
+
+/* Compact admin/sign in buttons in navbar */
+.rp-app-shell .navbar .btn-ghost {
+    font-size: 0.75rem;
+    padding: 0.4rem 0.7rem;
+    white-space: nowrap;
+}
+
+@media (max-width: 400px) {
+    .nav-brand {
+        font-size: 1.1rem;
+    }
+    .rp-app-shell .navbar .btn-ghost {
+        font-size: 0.65rem;
+        padding: 0.3rem 0.5rem;
+    }
+}
+
+/* ===== Scrollable Content Area ===== */
+.rp-main {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: var(--bottom-nav-height);
+    scroll-behavior: smooth;
+}
+
+/* Ensure view panels fill available height */
 .view-panel {
     display: none;
     flex-direction: column;
     min-height: 100%;
-    animation: fadeIn 0.4s ease;
+    animation: fadeIn 0.3s ease;
 }
 
 .view-panel.active-view {
@@ -82,46 +144,24 @@ body {
 }
 
 @keyframes fadeIn {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
 }
 
-/* ---------------- Navbar ---------------- */
-.navbar {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 1.2rem 1.5rem;
-    background: rgba(10, 10, 12, 0.4);
-    border-bottom: 1px solid var(--rp-glass-border);
-    backdrop-filter: blur(10px);
-}
-
-.nav-brand {
-    font-family: 'Cormorant Garamond', serif;
-    font-size: 1.6rem;
-    font-weight: 500;
-    color: var(--rp-primary);
-    text-decoration: none;
-    letter-spacing: 1px;
-    text-shadow: 0 0 15px rgba(255, 133, 161, 0.4);
-}
-
-/* ---------------- Bottom Nav ---------------- */
+/* ===== Bottom Navigation Bar ===== */
 .bottom-nav {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: 75px;
+    flex: 0 0 auto;
+    height: var(--bottom-nav-height);
     background: var(--rp-glass-heavy);
     display: flex;
     justify-content: space-around;
     align-items: center;
-    backdrop-filter: blur(20px);
     border-top: 1px solid var(--rp-glass-border);
-    z-index: 1000;
-    padding: 0 10px;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    z-index: 100;
+    padding: 0 4px;
+    /* Remove position:absolute — it's part of the flex column now */
 }
 
 .nav-btn {
@@ -129,52 +169,59 @@ body {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 4px;
+    gap: 3px;
     background: none;
     border: none;
     color: var(--rp-text-dim);
     transition: all 0.3s ease;
     cursor: pointer;
-    padding: 10px 0;
+    padding: 8px 4px;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    min-width: 0; /* Allow flex squeeze */
 }
 
 .nav-btn .nav-icon-img {
-    width: 28px;
-    height: 28px;
+    width: 26px;
+    height: 26px;
     object-fit: contain;
-    mix-blend-mode: multiply; /* Removes white background */
-    filter: brightness(1.1);
+    image-rendering: pixelated;
+    mix-blend-mode: multiply;
+    filter: brightness(1.2) invert(1);
     transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
 
 .nav-btn.active .nav-icon-img {
-    transform: translateY(-5px) scale(1.2);
-    filter: brightness(1.2) drop-shadow(0 0 8px rgba(255, 133, 161, 0.4));
+    transform: translateY(-3px) scale(1.15);
+    filter: brightness(1.0) invert(1) drop-shadow(0 0 6px rgba(255, 133, 161, 0.6));
 }
 
 .nav-btn .nav-text {
-    font-size: 0.75rem;
+    font-size: 0.7rem;
     font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .nav-btn.active {
     color: var(--rp-primary);
 }
 
-/* ---------------- Discovery Hub (Home) ---------------- */
+/* ===== Discovery Hub ===== */
 #view-home {
     padding: 1rem;
 }
 
 .hub-header {
-    margin-bottom: 1.5rem;
+    margin-bottom: 1.2rem;
 }
 
 .search-container {
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid var(--rp-glass-border);
     border-radius: 50px;
-    padding: 0.8rem 1.2rem;
+    padding: 0.7rem 1.1rem;
     display: flex;
     align-items: center;
     gap: 10px;
@@ -193,37 +240,46 @@ body {
     color: white;
     width: 100%;
     outline: none;
-    font-size: 0.95rem;
+    font-size: 0.9rem;
 }
 
 .hub-section h3 {
     font-family: 'Cormorant Garamond', serif;
-    font-size: 1.4rem;
-    margin-bottom: 1.2rem;
+    font-size: 1.3rem;
+    margin-bottom: 1rem;
     color: var(--rp-secondary);
 }
 
 .bots-grid {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
-    gap: 12px;
+    gap: 10px;
+}
+
+@media (max-width: 360px) {
+    .bots-grid {
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+    }
 }
 
 .bot-card {
     position: relative;
-    border-radius: 18px;
+    border-radius: 16px;
     overflow: hidden;
     aspect-ratio: 2/3;
     background: #1a1a1f;
     border: 1px solid var(--rp-glass-border);
     cursor: pointer;
-    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+    -webkit-tap-highlight-color: transparent;
 }
 
-.bot-card:hover {
-    transform: translateY(-5px);
+.bot-card:hover,
+.bot-card:active {
+    transform: translateY(-4px);
     border-color: var(--rp-primary);
-    box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
 }
 
 .bot-card img {
@@ -234,7 +290,7 @@ body {
 }
 
 .bot-card:hover img {
-    transform: scale(1.1);
+    transform: scale(1.08);
 }
 
 .bot-card-info {
@@ -242,96 +298,108 @@ body {
     bottom: 0;
     left: 0;
     right: 0;
-    padding: 1.5rem 1rem 1rem;
-    background: linear-gradient(to top, rgba(0,0,0,0.95) 0%, rgba(0,0,0,0.6) 60%, transparent 100%);
+    padding: 1.5rem 0.8rem 0.8rem;
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.95) 0%, rgba(0, 0, 0, 0.6) 60%, transparent 100%);
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 3px;
 }
 
 .bot-card-name {
     font-weight: 600;
-    font-size: 1rem;
+    font-size: 0.9rem;
     color: white;
-    text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .bot-card-creator {
-    font-size: 0.75rem;
+    font-size: 0.7rem;
     color: var(--rp-text-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
-/* ---------------- Form Styles (Create Bot) ---------------- */
+/* ===== Form / Create View ===== */
 .modern-form-container {
-    padding: 1.5rem;
+    padding: 1rem 1rem 2rem;
 }
 
 .create-header {
-    padding: 2rem 1.5rem 0;
+    padding: 1.5rem 1rem 0;
     text-align: center;
 }
 
 .premium-title {
     font-family: 'Cormorant Garamond', serif;
-    font-size: 2rem;
+    font-size: 1.8rem;
     color: var(--rp-primary);
-    margin-bottom: 0.5rem;
+    margin-bottom: 0.4rem;
 }
 
 .subtitle {
-    font-size: 0.9rem;
+    font-size: 0.85rem;
     color: var(--rp-text-dim);
+    margin-bottom: 1rem;
 }
 
 .form-section {
-    background: rgba(255,255,255,0.03);
+    background: rgba(255, 255, 255, 0.03);
     border: 1px solid var(--rp-glass-border);
-    border-radius: 20px;
-    padding: 1.5rem;
-    margin-bottom: 1.5rem;
+    border-radius: 18px;
+    padding: 1.2rem;
+    margin-bottom: 1.2rem;
 }
 
 .form-section h4 {
-    font-size: 0.85rem;
+    font-size: 0.8rem;
     text-transform: uppercase;
     letter-spacing: 1px;
     color: var(--rp-secondary);
-    margin-bottom: 1.2rem;
+    margin-bottom: 1rem;
 }
 
 .form-group {
-    margin-bottom: 1.2rem;
+    margin-bottom: 1rem;
 }
 
 .form-group label {
     display: block;
-    font-size: 0.9rem;
-    margin-bottom: 0.5rem;
+    font-size: 0.85rem;
+    margin-bottom: 0.4rem;
     color: var(--rp-text-dim);
 }
 
-.input-modern, .modern-textarea {
+.input-modern,
+.modern-textarea {
     width: 100%;
-    background: rgba(0,0,0,0.3);
+    background: rgba(0, 0, 0, 0.3);
     border: 1px solid var(--rp-glass-border);
     border-radius: 12px;
-    padding: 0.8rem 1rem;
+    padding: 0.75rem 0.9rem;
     color: white;
     font-family: inherit;
     transition: all 0.3s ease;
-    font-size: 0.95rem;
+    font-size: 0.9rem;
+    -webkit-appearance: none;
+    appearance: none;
 }
 
-.input-modern:focus, .modern-textarea:focus {
+.input-modern:focus,
+.modern-textarea:focus {
     border-color: var(--rp-primary);
-    background: rgba(0,0,0,0.4);
+    background: rgba(0, 0, 0, 0.4);
+    outline: none;
 }
 
 .avatar-upload-zone {
     width: 100%;
-    height: 150px;
+    height: 130px;
     border: 2px dashed var(--rp-glass-border);
-    border-radius: 18px;
+    border-radius: 16px;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -344,7 +412,7 @@ body {
 
 .avatar-upload-zone:hover {
     border-color: var(--rp-primary);
-    background: rgba(255,133,161,0.05);
+    background: rgba(255, 133, 161, 0.05);
 }
 
 .avatar-upload-zone img {
@@ -353,69 +421,73 @@ body {
     object-fit: cover;
 }
 
-/* ---------------- Profile Page & Menus ---------------- */
+/* ===== Profile View ===== */
 #view-profile {
-    padding: 2rem 1.5rem;
+    padding: 1.5rem 1rem 2rem;
 }
 
 .profile-page-header {
     text-align: center;
-    margin-bottom: 3rem;
+    margin-bottom: 2rem;
 }
 
 .profile-avatar-wrapper {
     position: relative;
     display: inline-block;
-    margin-bottom: 1.5rem;
+    margin-bottom: 1.2rem;
 }
 
 .user-avatar-large {
-    width: 120px;
-    height: 120px;
+    width: 100px;
+    height: 100px;
     border-radius: 50%;
     border: 3px solid var(--rp-primary);
-    padding: 4px;
+    padding: 3px;
     background: var(--rp-glass);
+    display: block;
 }
 
 .profile-menu {
     display: flex;
     flex-direction: column;
-    gap: 2rem;
+    gap: 1.5rem;
 }
 
 .menu-group {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 8px;
 }
 
 .menu-group h4 {
-    font-size: 0.8rem;
+    font-size: 0.75rem;
     text-transform: uppercase;
     color: var(--rp-text-dim);
     margin-left: 0.5rem;
-    margin-bottom: 0.5rem;
+    margin-bottom: 0.4rem;
 }
 
 .menu-item {
-    background: rgba(255,255,255,0.04);
+    background: rgba(255, 255, 255, 0.04);
     border: 1px solid var(--rp-glass-border);
-    border-radius: 15px;
-    padding: 1.2rem;
+    border-radius: 14px;
+    padding: 1rem;
     text-align: left;
     color: white;
-    font-size: 1rem;
+    font-size: 0.95rem;
     cursor: pointer;
     transition: all 0.3s ease;
     display: flex;
     justify-content: space-between;
     align-items: center;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
 }
 
-.menu-item:hover {
-    background: rgba(255,255,255,0.08);
-    transform: translateX(5px);
+.menu-item:hover,
+.menu-item:active {
+    background: rgba(255, 255, 255, 0.08);
+    transform: translateX(4px);
 }
 
 .menu-item.highlight {
@@ -434,75 +506,79 @@ body {
     border-color: rgba(255, 107, 107, 0.2);
 }
 
-/* ---------------- Chat View Specifics ---------------- */
+/* ===== Chat View ===== */
+#view-chats {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
 .chat-messages-container {
     flex: 1;
     overflow-y: auto;
-    padding: 1.5rem;
-    padding-bottom: 140px; /* Increased space for the floating input */
+    -webkit-overflow-scrolling: touch;
+    padding: 1rem;
+    padding-bottom: 1rem; /* Input is in-flow now */
     display: flex;
     flex-direction: column;
-    gap: 1.5rem;
+    gap: 1.2rem;
     scroll-behavior: smooth;
 }
 
 .chat-bubble {
     max-width: 85%;
-    padding: 1rem 1.2rem;
-    border-radius: 20px;
-    font-size: 0.95rem;
+    padding: 0.9rem 1.1rem;
+    border-radius: 18px;
+    font-size: 0.9rem;
     line-height: 1.5;
     position: relative;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+    word-break: break-word;
 }
 
 .msg-bot {
     align-self: flex-start;
     background: rgba(30, 30, 35, 0.8);
     border-bottom-left-radius: 4px;
-    border: 1px solid rgba(255,255,255,0.05);
+    border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .msg-user {
     align-self: flex-end;
     background: linear-gradient(135deg, rgba(var(--rp-primary-rgb), 0.3), rgba(162, 148, 203, 0.3));
     border-bottom-right-radius: 4px;
-    border: 1px solid rgba(255,255,255,0.1);
+    border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .chat-input-area {
-    position: absolute;
-    bottom: 82px; /* Moved down even further, just above bottom nav (75px) */
-    left: 1rem;
-    right: 1rem;
-    padding: 0.5rem;
+    flex: 0 0 auto;
+    padding: 0.6rem 0.8rem;
     background: var(--rp-glass-heavy);
-    border: 1px solid var(--rp-glass-border);
-    border-radius: 30px;
+    border-top: 1px solid var(--rp-glass-border);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
-    box-shadow: var(--rp-shadow);
-    z-index: 10;
 }
 
 .input-wrapper {
     display: flex;
     align-items: flex-end;
-    gap: 12px;
-    background: rgba(255,255,255,0.05);
-    border-radius: 25px;
-    padding: 8px 12px;
+    gap: 10px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 22px;
+    padding: 6px 10px;
     border: 1px solid var(--rp-glass-border);
 }
 
 .input-wrapper .modern-textarea {
     background: none;
     border: none;
-    padding: 8px 4px;
-    max-height: 150px;
+    padding: 6px 4px;
+    max-height: 120px;
+    resize: none;
+    font-size: 0.9rem;
 }
 
-/* ---------------- Buttons ---------------- */
+/* ===== Buttons ===== */
 .btn {
     border-radius: 12px;
     font-weight: 600;
@@ -510,6 +586,8 @@ body {
     cursor: pointer;
     font-family: inherit;
     border: 1px solid transparent;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
 }
 
 .btn-primary {
@@ -517,7 +595,8 @@ body {
     color: white;
 }
 
-.btn-primary:hover {
+.btn-primary:hover,
+.btn-primary:active {
     transform: scale(1.02);
     filter: brightness(1.1);
 }
@@ -526,16 +605,84 @@ body {
     box-shadow: 0 0 20px rgba(255, 133, 161, 0.4);
 }
 
-/* ---------------- Utilities ---------------- */
+/* ===== Menu Dropdown (Chat) ===== */
+.chat-menu-dropdown {
+    position: absolute;
+    top: calc(var(--navbar-height) + 4px);
+    right: 0.5rem;
+    background: var(--rp-glass-heavy);
+    border: 1px solid var(--rp-glass-border);
+    border-radius: 14px;
+    min-width: 200px;
+    z-index: 200;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    box-shadow: var(--rp-shadow);
+    overflow: hidden;
+}
+
+/* ===== Modals ===== */
+.modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    display: flex;
+    align-items: flex-end; /* Bottom sheet on mobile */
+    justify-content: center;
+    z-index: 500;
+    padding: 0;
+}
+
+.modal-content {
+    background: var(--rp-glass-heavy);
+    border: 1px solid var(--rp-glass-border);
+    border-radius: 24px 24px 0 0;
+    width: 100%;
+    max-width: 600px;
+    max-height: 90vh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 1.5rem;
+    animation: slideUp 0.3s ease;
+}
+
+@keyframes slideUp {
+    from { transform: translateY(60px); opacity: 0; }
+    to   { transform: translateY(0);    opacity: 1; }
+}
+
+/* ===== Utilities ===== */
 .hidden { display: none !important; }
 
-/* Desktop Adjustment for wider screens */
-@media (min-width: 1200px) {
-    .rp-container {
-        max-width: 500px;
-        height: 90vh;
-        margin-top: 2vh;
-        border-radius: 40px;
-        border: 1px solid var(--rp-glass-border);
-    }
+.info-text {
+    color: var(--rp-text-dim);
+    text-align: center;
+    padding: 2rem;
+    font-size: 0.9rem;
 }
+
+.error-text {
+    color: #ff6b6b;
+    text-align: center;
+    padding: 1rem;
+    font-size: 0.9rem;
+}
+
+/* ===== Scrollbar Styling (Desktop) ===== */
+.rp-main::-webkit-scrollbar,
+.chat-messages-container::-webkit-scrollbar,
+.modal-content::-webkit-scrollbar {
+    width: 4px;
+}
+
+.rp-main::-webkit-scrollbar-thumb,
+.chat-messages-container::-webkit-scrollbar-thumb,
+.modal-content::-webkit-scrollbar-thumb {
+    background: rgba(255, 133, 161, 0.3);
+    border-radius: 2px;
+}
+
+/* ===== Legacy: keep old .rp-container class as alias ===== */
+/* .rp-container is no longer used as the outer shell. Kept for reference. */
