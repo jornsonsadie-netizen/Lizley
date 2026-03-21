@@ -35,10 +35,54 @@ const rpdLimit = document.getElementById('rpd-limit');
 const totalTokens = document.getElementById('total-tokens');
 
 /**
+ * Fetch and display public models
+ */
+async function fetchPublicModels() {
+    const dropdown = document.getElementById('model-dropdown');
+    if (!dropdown) return;
+    
+    try {
+        const response = await fetch('/api/public-models');
+        if (!response.ok) throw new Error('Failed to fetch models');
+        
+        const data = await response.json();
+        const models = data.models || [];
+        
+        dropdown.innerHTML = ''; // Clear loading text
+        
+        if (models.length === 0) {
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = 'No models available';
+            dropdown.appendChild(option);
+            return;
+        }
+        
+        models.forEach(model => {
+            const option = document.createElement('option');
+            option.value = model.id;
+            option.textContent = `${model.id} - ${model.status}`;
+            
+            if (model.status === 'DOWN') {
+                option.style.color = 'var(--accent-red, #ff4d4d)';
+            } else {
+                option.style.color = 'var(--accent-green, #4dff4d)';
+            }
+            
+            dropdown.appendChild(option);
+        });
+    } catch (error) {
+        console.error('Error fetching public models:', error);
+        dropdown.innerHTML = '<option value="">Error loading models</option>';
+    }
+}
+
+/**
  * Initialize the application
  */
 async function init() {
     await checkLoggedIn();
+    await fetchPublicModels();
     
     // Show Terms of Service on every refresh
     const tosModal = document.getElementById('tos-modal');

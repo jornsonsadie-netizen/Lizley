@@ -883,9 +883,11 @@ async def verify_admin_password(
     )
 
 
-# Background task for periodic saves
+# Background task for periodic saves and health checks
 import asyncio
 save_task: Optional[asyncio.Task] = None
+health_check_task: Optional[asyncio.Task] = None
+MODEL_HEALTH: Dict[str, bool] = {}
 
 
 async def periodic_save():
@@ -897,6 +899,52 @@ async def periodic_save():
             print("[Auto-Save] Analytics persisted to database")
         except Exception as e:
             print(f"[Auto-Save] Error: {e}")
+
+
+async def periodic_health_check():
+    """Background task that checks model health every 10 minutes."""
+    while True:
+        try:
+            target_url, target_key = await get_target_api_config()
+            if target_url and target_key:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(
+                        f"{target_url}/models",
+                        headers={"Authorization": f"Bearer {target_key}"},
+                        timeout=15.0
+                    )
+                    if resp.status_code == 200:
+                        content = resp.json()
+                        available_models = content.get("data", [])
+                        
+                        excluded = await db.get_excluded_models()
+                        enabled_models = [m["id"] for m in available_models if m.get("id") and m["id"] not in excluded]
+                        
+                        for model_id in enabled_models:
+                            # Send a minimal 1-token request to check health
+                            try:
+                                check_resp = await client.post(
+                                    f"{target_url}/chat/completions",
+                                    headers={"Authorization": f"Bearer {target_key}"},
+                                    json={
+                                        "model": model_id,
+                                        "messages": [{"role": "user", "content": "health check"}],
+                                        "max_tokens": 1
+                                    },
+                                    timeout=10.0
+                                )
+                                MODEL_HEALTH[model_id] = (check_resp.status_code == 200)
+                            except Exception as e:
+                                print(f"[Health Check] Error checking {model_id}: {e}")
+                                MODEL_HEALTH[model_id] = False
+                            
+                            # Add a small delay to avoid hitting rate limits too hard during checks
+                            await asyncio.sleep(1)
+        except Exception as e:
+            print(f"[Health Check] Error: {e}")
+            
+        await asyncio.sleep(600)  # 10 minutes
+
 
 
 @asynccontextmanager
@@ -954,6 +1002,10 @@ async def lifespan(app: FastAPI):
     save_task = asyncio.create_task(periodic_save())
     print("* Started periodic auto-save (every 5 minutes)")
     
+    # Start periodic health check task
+    health_check_task = asyncio.create_task(periodic_health_check())
+    print("* Started periodic health check (every 10 minutes)")
+    
     yield
     
     # Shutdown: Cancel save task, close HTTP client, and close database
@@ -961,6 +1013,13 @@ async def lifespan(app: FastAPI):
         save_task.cancel()
         try:
             await save_task
+        except asyncio.CancelledError:
+            pass
+            
+    if health_check_task:
+        health_check_task.cancel()
+        try:
+            await health_check_task
         except asyncio.CancelledError:
             pass
     
@@ -1361,6 +1420,43 @@ async def proxy_models(
 ):
     """Proxy the /v1/models endpoint to the target API. Served at both /v1/models and /v1/models/ to avoid 301 redirect (no Location header)."""
     return await _proxy_models_impl(key_data)
+
+
+@app.get("/api/public-models", response_class=JSONResponse)
+async def get_public_models():
+    """Unauthenticated endpoint to get enabled models and their health status."""
+    try:
+        target_url, target_key = await get_target_api_config()
+    except Exception:
+        return {"models": []}
+        
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{target_url}/models", 
+                headers={"Authorization": f"Bearer {target_key}", "Cache-Control": "no-cache"}, 
+                timeout=10.0
+            )
+            if resp.status_code == 200:
+                content = resp.json()
+                available_models = content.get("data", [])
+                
+                excluded = await db.get_excluded_models()
+                result = []
+                # Sort alphabetically
+                for m in sorted(available_models, key=lambda x: x.get("id", "")):
+                    model_id = m.get("id")
+                    if model_id and model_id not in excluded:
+                        # Default to HEALTHY if it hasn't been checked yet
+                        status = "HEALTHY" if MODEL_HEALTH.get(model_id, True) else "DOWN"
+                        result.append({"id": model_id, "status": status})
+                
+                return {"models": result}
+    except Exception as e:
+        print(f"[Public Models] Error fetching models: {e}")
+        
+    return {"models": []}
+
 
 
 @app.post("/v1/chat/completions")
