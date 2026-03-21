@@ -6,6 +6,7 @@
 // Constants
 const STORAGE_KEY_PREFIX = 'ai_proxy_key_prefix';
 const STORAGE_FULL_KEY = 'ai_proxy_full_key';
+const STORAGE_CLIENT_ID = 'ai_proxy_client_id';
 
 // State
 let currentKeyPrefix = null;
@@ -60,7 +61,15 @@ async function getHardwareFingerprint() {
     const cores = navigator.hardwareConcurrency || '';
     const ram = navigator.deviceMemory || '';
     const os = navigator.platform;
-    const str = `${renderer}-${vendor}-${screenInfo}-${cores}-${ram}-${os}`;
+    
+    // Persistent ID for stability on refresh even if hardware flags fluctuate
+    let clientId = localStorage.getItem(STORAGE_CLIENT_ID);
+    if (!clientId) {
+        clientId = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+        localStorage.setItem(STORAGE_CLIENT_ID, clientId);
+    }
+    
+    const str = `${renderer}-${vendor}-${screenInfo}-${cores}-${ram}-${os}-${clientId}`;
     
     // Use fallback hashing locally over HTTP since crypto.subtle requires HTTPS
     if (!window.crypto || !window.crypto.subtle) {

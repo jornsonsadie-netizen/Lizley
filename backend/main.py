@@ -1050,29 +1050,38 @@ async def generate_key_endpoint(
         await db.delete_disabled_keys_by_fingerprint(fingerprint)
     await db.delete_disabled_keys_by_ip(client_ip)
     
-    # 1. Check if IP already has a key
-    existing_key = await db.get_key_by_ip(client_ip)
-    if existing_key:
-        # Update fingerprint if provided and not set
-        if fingerprint and not existing_key.browser_fingerprint:
-            await db.update_key_fingerprint(existing_key.id, fingerprint)
-        return KeyGenerationResponse(
-            key=existing_key.full_key,  # Return full key from database
-            key_prefix=existing_key.key_prefix,
-            message="Your API key is shown below."
-        )
-    
-    # 2. Check if fingerprint matches an existing key (IP changed)
+    # 1. Check if fingerprint matches an existing key (Persistent Identification)
     if fingerprint:
         fingerprint_key = await db.get_key_by_fingerprint(fingerprint)
         if fingerprint_key:
-            # Update the IP address to the new one
-            await db.update_key_ip(fingerprint_key.id, client_ip)
+            # Update the IP address to the new one if it changed
+            if fingerprint_key.ip_address != client_ip:
+                print(f"[Auth] Device migration: Key {fingerprint_key.key_prefix} moved to {client_ip}")
+                await db.update_key_ip(fingerprint_key.id, client_ip)
             return KeyGenerationResponse(
-                key=fingerprint_key.full_key,  # Return full key from database
+                key=fingerprint_key.full_key,
                 key_prefix=fingerprint_key.key_prefix,
-                message="Welcome back! Your IP changed but we recognized your browser."
+                message="Your API key has been restored for this device."
             )
+    
+    # 2. Check if IP already has a key (Legacy/Fallback Identification)
+    existing_key = await db.get_key_by_ip(client_ip)
+    if existing_key:
+        # VALIDATION: Only return the IP's key if it matches this fingerprint OR has no fingerprint
+        # This prevents User B from getting User A's key on a shared IP.
+        if not existing_key.browser_fingerprint or existing_key.browser_fingerprint == fingerprint:
+            # Update fingerprint if provided and not set
+            if fingerprint and not existing_key.browser_fingerprint:
+                await db.update_key_fingerprint(existing_key.id, fingerprint)
+            return KeyGenerationResponse(
+                key=existing_key.full_key,
+                key_prefix=existing_key.key_prefix,
+                message="Your API key is shown below."
+            )
+        else:
+            # Shared IP conflict: The IP has a key, but it belongs to a different fingerprint.
+            # We will fall through to generate a NEW unique key for THIS fingerprint.
+            print(f"[Auth] Shared IP detected for {client_ip}. Generating unique key for new device fingerprint.")
     
     # Abuse protection: limit keys per IP
     max_keys = (settings.max_keys_per_ip if settings else 2)
