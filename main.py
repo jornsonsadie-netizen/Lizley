@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Entry point for Vercel and local development."""
+"""Entry point for Vercel and local development. v2"""
 import uvicorn
 from backend.main import app
 
