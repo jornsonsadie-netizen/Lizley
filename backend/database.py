@@ -32,7 +32,7 @@ class ApiKeyRecord:
     discord_email: Optional[str]  # Discord email/username for display
     ip_address: str  # Keep for logging purposes
     browser_fingerprint: Optional[str]
-    rp_application: Optional[str]  # What RP the user uses (asked during signup)
+
     current_rpm: int
     current_rpd: int
     last_rpm_reset: datetime
@@ -123,12 +123,8 @@ class ProxyConfig:
     max_context: int
     max_output_tokens: int
 
-@dataclass
-class ModelAlias:
-    """A custom alias for a model. Replaces the old exclusion system."""
-    model_id: str
-    alias_name: str
 
+<<<<<<< HEAD
 @dataclass
 class RpUser:
     """A user registered to the LizRP platform."""
@@ -177,6 +173,8 @@ class RpChat:
     owner_id: str
     created_at: datetime
     updated_at: datetime
+=======
+>>>>>>> e512792 (feat: complete removal of LizRP features and associated database/backend logic)
 
 def create_database(database_url: Optional[str] = None, database_path: str = "./proxy.db") -> "Database":
     """Factory function to create the appropriate database instance."""
@@ -200,7 +198,7 @@ class Database(ABC):
     
     # API Key operations
     @abstractmethod
-    async def create_api_key(self, discord_id: str, discord_email: Optional[str], key_hash: str, key_prefix: str, full_key: str, ip_address: str = "unknown", rp_application: Optional[str] = None, enabled: bool = True, browser_fingerprint: Optional[str] = None) -> int:
+    async def create_api_key(self, discord_id: str, discord_email: Optional[str], key_hash: str, key_prefix: str, full_key: str, ip_address: str = "unknown", enabled: bool = True, browser_fingerprint: Optional[str] = None) -> int:
         pass
     
     @abstractmethod
@@ -434,6 +432,7 @@ class Database(ABC):
         """Count unreviewed flags."""
         pass
         
+<<<<<<< HEAD
     # --- LizRP Abstract Methods ---
     
     # Model Aliases
@@ -500,6 +499,9 @@ class Database(ABC):
     
     @abstractmethod
     async def delete_rp_chat(self, id: str) -> bool: pass
+=======
+
+>>>>>>> e512792 (feat: complete removal of LizRP features and associated database/backend logic)
 
 
 class SQLiteDatabase(Database):
@@ -550,7 +552,7 @@ class SQLiteDatabase(Database):
             ("browser_fingerprint", "ALTER TABLE api_keys ADD COLUMN browser_fingerprint TEXT"),
             ("full_key", "ALTER TABLE api_keys ADD COLUMN full_key TEXT"),
             ("bypass_ip_ban", "ALTER TABLE api_keys ADD COLUMN bypass_ip_ban BOOLEAN DEFAULT 0"),
-            ("rp_application", "ALTER TABLE api_keys ADD COLUMN rp_application TEXT"),
+
         ]:
             try:
                 await conn.execute(f"SELECT {col} FROM api_keys LIMIT 1")
@@ -634,6 +636,7 @@ class SQLiteDatabase(Database):
             )
         """)
         
+<<<<<<< HEAD
         # RP Model aliases
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS model_aliases (
@@ -710,12 +713,15 @@ class SQLiteDatabase(Database):
         """)
         
         await conn.commit()
+=======
+>>>>>>> e512792 (feat: complete removal of LizRP features and associated database/backend logic)
 
-    async def create_api_key(self, discord_id: str, discord_email: Optional[str], key_hash: str, key_prefix: str, full_key: str, ip_address: str = "unknown", rp_application: Optional[str] = None, enabled: bool = True, browser_fingerprint: Optional[str] = None) -> int:
+
+    async def create_api_key(self, discord_id: str, discord_email: Optional[str], key_hash: str, key_prefix: str, full_key: str, ip_address: str = "unknown", enabled: bool = True, browser_fingerprint: Optional[str] = None) -> int:
         conn = await self._get_connection()
         cursor = await conn.execute(
-            "INSERT INTO api_keys (discord_id, discord_email, ip_address, key_hash, key_prefix, full_key, rp_application, enabled, browser_fingerprint) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (discord_id, discord_email, ip_address, key_hash, key_prefix, full_key, rp_application, 1 if enabled else 0, browser_fingerprint)
+            "INSERT INTO api_keys (discord_id, discord_email, ip_address, key_hash, key_prefix, full_key, enabled, browser_fingerprint) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (discord_id, discord_email, ip_address, key_hash, key_prefix, full_key, 1 if enabled else 0, browser_fingerprint)
         )
         await conn.commit()
         return cursor.lastrowid
@@ -1099,7 +1105,7 @@ class SQLiteDatabase(Database):
             discord_email=row["discord_email"] if "discord_email" in row.keys() else None,
             ip_address=row["ip_address"],
             browser_fingerprint=row["browser_fingerprint"] if "browser_fingerprint" in row.keys() else None,
-            rp_application=row["rp_application"] if "rp_application" in row.keys() else None,
+
             current_rpm=row["current_rpm"], current_rpd=row["current_rpd"],
             last_rpm_reset=self._parse_ts(row["last_rpm_reset"]), last_rpd_reset=self._parse_ts(row["last_rpd_reset"]),
             enabled=bool(row["enabled"]),
@@ -1168,6 +1174,7 @@ class SQLiteDatabase(Database):
         rows = await cursor.fetchall()
         return [self._row_to_content_flag(row) for row in rows]
 
+<<<<<<< HEAD
     # --- LizRP SQLite Implementations ---
     
     # Model Aliases
@@ -1242,121 +1249,9 @@ class SQLiteDatabase(Database):
             creator_id=row["creator_id"], created_at=self._parse_ts(row["created_at"]),
             creator_name=creator_name
         )
+=======
+>>>>>>> e512792 (feat: complete removal of LizRP features and associated database/backend logic)
 
-    # RP Bots
-    async def create_rp_bot(self, id: str, name: str, avatar: Optional[str], description: Optional[str], lore: Optional[str], personality: Optional[str], tags: Optional[str], creator_id: Optional[str]) -> bool:
-        conn = await self._get_connection()
-        cursor = await conn.execute("INSERT INTO rp_bots (id, name, avatar, description, lore, personality, tags, creator_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (id, name, avatar, description, lore, personality, tags, creator_id))
-        await conn.commit()
-        return cursor.rowcount > 0
-        
-    async def get_rp_bots(self, limit: int = 50, offset: int = 0, search_query: Optional[str] = None) -> List[RpBot]:
-        conn = await self._get_connection()
-        base_query = """
-            SELECT b.*, u.username as creator_name 
-            FROM rp_bots b 
-            LEFT JOIN rp_users u ON b.creator_id = u.id
-        """
-        if search_query:
-            q = f"%{search_query}%"
-            cursor = await conn.execute(f"{base_query} WHERE b.name LIKE ? OR b.tags LIKE ? ORDER BY b.created_at DESC LIMIT ? OFFSET ?", (q, q, limit, offset))
-        else:
-            cursor = await conn.execute(f"{base_query} ORDER BY b.created_at DESC LIMIT ? OFFSET ?", (limit, offset))
-        rows = await cursor.fetchall()
-        return [await self._row_to_rp_bot(row) for row in rows]
-        
-    async def get_rp_bot_by_id(self, id: str) -> Optional[RpBot]:
-        conn = await self._get_connection()
-        cursor = await conn.execute("""
-            SELECT b.*, u.username as creator_name 
-            FROM rp_bots b 
-            LEFT JOIN rp_users u ON b.creator_id = u.id 
-            WHERE b.id = ?
-        """, (id,))
-        row = await cursor.fetchone()
-        return await self._row_to_rp_bot(row) if row else None
-        
-    async def update_rp_bot(self, id: str, name: str, avatar: Optional[str], description: Optional[str], lore: Optional[str], personality: Optional[str], tags: Optional[str]) -> bool:
-        conn = await self._get_connection()
-        cursor = await conn.execute("UPDATE rp_bots SET name = ?, avatar = ?, description = ?, lore = ?, personality = ?, tags = ? WHERE id = ?",
-            (name, avatar, description, lore, personality, tags, id))
-        await conn.commit()
-        return cursor.rowcount > 0
-        
-    async def _row_to_rp_oc(self, row) -> RpOc:
-        return RpOc(
-            id=row["id"], name=row["name"], avatar=row["avatar"], description=row["description"],
-            lore=row["lore"], personality=row["personality"], owner_id=row["owner_id"],
-            created_at=self._parse_ts(row["created_at"])
-        )
-
-    # RP OCs
-    async def create_rp_oc(self, id: str, name: str, avatar: Optional[str], description: Optional[str], lore: Optional[str], personality: Optional[str], owner_id: str) -> bool:
-        conn = await self._get_connection()
-        cursor = await conn.execute("INSERT INTO rp_ocs (id, name, avatar, description, lore, personality, owner_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (id, name, avatar, description, lore, personality, owner_id))
-        await conn.commit()
-        return cursor.rowcount > 0
-        
-    async def get_rp_ocs_by_owner(self, owner_id: str) -> List[RpOc]:
-        conn = await self._get_connection()
-        cursor = await conn.execute("SELECT * FROM rp_ocs WHERE owner_id = ? ORDER BY created_at DESC", (owner_id,))
-        rows = await cursor.fetchall()
-        return [await self._row_to_rp_oc(row) for row in rows]
-        
-    async def get_rp_oc_by_id(self, id: str) -> Optional[RpOc]:
-        conn = await self._get_connection()
-        cursor = await conn.execute("SELECT * FROM rp_ocs WHERE id = ?", (id,))
-        row = await cursor.fetchone()
-        return await self._row_to_rp_oc(row) if row else None
-        
-    async def update_rp_oc(self, id: str, name: str, avatar: Optional[str], description: Optional[str], lore: Optional[str], personality: Optional[str]) -> bool:
-        conn = await self._get_connection()
-        cursor = await conn.execute("UPDATE rp_ocs SET name = ?, avatar = ?, description = ?, lore = ?, personality = ? WHERE id = ?",
-            (name, avatar, description, lore, personality, id))
-        await conn.commit()
-        return cursor.rowcount > 0
-        
-    async def _row_to_rp_chat(self, row) -> RpChat:
-        return RpChat(
-            id=row["id"], bot_id=row["bot_id"], oc_id=row["oc_id"], wallpaper=row["wallpaper"],
-            model_id=row["model_id"], messages=row["messages"], owner_id=row["owner_id"],
-            created_at=self._parse_ts(row["created_at"]), updated_at=self._parse_ts(row["updated_at"])
-        )
-
-    # RP Chats
-    async def create_rp_chat(self, id: str, bot_id: str, oc_id: Optional[str], model_id: Optional[str], messages: str, owner_id: str) -> bool:
-        conn = await self._get_connection()
-        cursor = await conn.execute("INSERT INTO rp_chats (id, bot_id, oc_id, model_id, messages, owner_id) VALUES (?, ?, ?, ?, ?, ?)",
-            (id, bot_id, oc_id, model_id, messages, owner_id))
-        await conn.commit()
-        return cursor.rowcount > 0
-        
-    async def get_rp_chats_by_owner(self, owner_id: str) -> List[RpChat]:
-        conn = await self._get_connection()
-        cursor = await conn.execute("SELECT * FROM rp_chats WHERE owner_id = ? ORDER BY updated_at DESC", (owner_id,))
-        rows = await cursor.fetchall()
-        return [await self._row_to_rp_chat(row) for row in rows]
-        
-    async def get_rp_chat_by_id(self, id: str) -> Optional[RpChat]:
-        conn = await self._get_connection()
-        cursor = await conn.execute("SELECT * FROM rp_chats WHERE id = ?", (id,))
-        row = await cursor.fetchone()
-        return await self._row_to_rp_chat(row) if row else None
-        
-    async def update_rp_chat(self, id: str, messages: str, wallpaper: Optional[str], model_id: Optional[str], oc_id: Optional[str]) -> bool:
-        conn = await self._get_connection()
-        cursor = await conn.execute("UPDATE rp_chats SET messages = ?, wallpaper = ?, model_id = ?, oc_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (messages, wallpaper, model_id, oc_id, id))
-        await conn.commit()
-        return cursor.rowcount > 0
-        
-    async def delete_rp_chat(self, id: str) -> bool:
-        conn = await self._get_connection()
-        cursor = await conn.execute("DELETE FROM rp_chats WHERE id = ?", (id,))
-        await conn.commit()
-        return cursor.rowcount > 0
 
 
     async def get_flag_by_id(self, flag_id: int) -> Optional[ContentFlagRecord]:
@@ -1473,8 +1368,7 @@ class PostgreSQLDatabase(Database):
                 await conn.execute("ALTER TABLE api_keys ADD COLUMN discord_email TEXT")
             if 'bypass_ip_ban' not in existing_col_names:
                 await conn.execute("ALTER TABLE api_keys ADD COLUMN bypass_ip_ban BOOLEAN DEFAULT FALSE")
-            if 'rp_application' not in existing_col_names:
-                await conn.execute("ALTER TABLE api_keys ADD COLUMN rp_application TEXT")
+
             
             # Create indexes (safe to run multiple times)
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_ip ON api_keys(ip_address)")
@@ -1560,6 +1454,7 @@ class PostgreSQLDatabase(Database):
                 )
             """)
             
+<<<<<<< HEAD
             # RP Model aliases
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS model_aliases (
@@ -1635,13 +1530,16 @@ class PostgreSQLDatabase(Database):
                     FOREIGN KEY (owner_id) REFERENCES rp_users(id) ON DELETE CASCADE
                 )
             """)
+=======
+>>>>>>> e512792 (feat: complete removal of LizRP features and associated database/backend logic)
 
-    async def create_api_key(self, discord_id: str, discord_email: Optional[str], key_hash: str, key_prefix: str, full_key: str, ip_address: str = "unknown", rp_application: Optional[str] = None, enabled: bool = True, browser_fingerprint: Optional[str] = None) -> int:
+
+    async def create_api_key(self, discord_id: str, discord_email: Optional[str], key_hash: str, key_prefix: str, full_key: str, ip_address: str = "unknown", enabled: bool = True, browser_fingerprint: Optional[str] = None) -> int:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                "INSERT INTO api_keys (discord_id, discord_email, ip_address, key_hash, key_prefix, full_key, rp_application, enabled, browser_fingerprint) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id",
-                discord_id, discord_email, ip_address, key_hash, key_prefix, full_key, rp_application, enabled, browser_fingerprint
+                "INSERT INTO api_keys (discord_id, discord_email, ip_address, key_hash, key_prefix, full_key, enabled, browser_fingerprint) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id",
+                discord_id, discord_email, ip_address, key_hash, key_prefix, full_key, enabled, browser_fingerprint
             )
             return row["id"]
 
@@ -2044,7 +1942,7 @@ class PostgreSQLDatabase(Database):
             discord_email=self._safe_get(row, "discord_email"),
             ip_address=row["ip_address"],
             browser_fingerprint=self._safe_get(row, "browser_fingerprint"),
-            rp_application=self._safe_get(row, "rp_application"),
+
             current_rpm=row["current_rpm"], current_rpd=row["current_rpd"],
             last_rpm_reset=row["last_rpm_reset"], last_rpd_reset=row["last_rpd_reset"],
             enabled=row["enabled"],
@@ -2161,6 +2059,7 @@ class PostgreSQLDatabase(Database):
             reviewed_at=row["reviewed_at"],
         )
 
+<<<<<<< HEAD
     # --- LizRP PostgreSQL Implementations ---
     
     # Model Aliases
@@ -2236,120 +2135,6 @@ class PostgreSQLDatabase(Database):
             creator_id=self._safe_get(row, "creator_id"), created_at=row["created_at"],
             creator_name=self._safe_get(row, "creator_name")
         )
+=======
+>>>>>>> e512792 (feat: complete removal of LizRP features and associated database/backend logic)
 
-    # RP Bots
-    async def create_rp_bot(self, id: str, name: str, avatar: Optional[str], description: Optional[str], lore: Optional[str], personality: Optional[str], tags: Optional[str], creator_id: Optional[str]) -> bool:
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            result = await conn.execute("INSERT INTO rp_bots (id, name, avatar, description, lore, personality, tags, creator_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-                id, name, avatar, description, lore, personality, tags, creator_id)
-            return bool(result)
-            
-    async def get_rp_bots(self, limit: int = 50, offset: int = 0, search_query: Optional[str] = None) -> List[RpBot]:
-        pool = await self._get_pool()
-        base_query = """
-            SELECT b.*, u.username as creator_name 
-            FROM rp_bots b 
-            LEFT JOIN rp_users u ON b.creator_id = u.id
-        """
-        async with pool.acquire() as conn:
-            if search_query:
-                q = f"%{search_query}%"
-                rows = await conn.fetch(f"{base_query} WHERE b.name ILIKE $1 OR b.tags ILIKE $1 ORDER BY b.created_at DESC LIMIT $2 OFFSET $3", q, limit, offset)
-            else:
-                rows = await conn.fetch(f"{base_query} ORDER BY b.created_at DESC LIMIT $1 OFFSET $2", limit, offset)
-            return [self._row_to_rp_bot(row) for row in rows]
-            
-    async def get_rp_bot_by_id(self, id: str) -> Optional[RpBot]:
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow("""
-                SELECT b.*, u.username as creator_name 
-                FROM rp_bots b 
-                LEFT JOIN rp_users u ON b.creator_id = u.id 
-                WHERE b.id = $1
-            """, id)
-            return self._row_to_rp_bot(row) if row else None
-            
-    async def update_rp_bot(self, id: str, name: str, avatar: Optional[str], description: Optional[str], lore: Optional[str], personality: Optional[str], tags: Optional[str]) -> bool:
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            result = await conn.execute("UPDATE rp_bots SET name = $1, avatar = $2, description = $3, lore = $4, personality = $5, tags = $6 WHERE id = $7",
-                name, avatar, description, lore, personality, tags, id)
-            return result == "UPDATE 1"
-            
-    def _row_to_rp_oc(self, row) -> RpOc:
-        return RpOc(
-            id=row["id"], name=row["name"], avatar=self._safe_get(row, "avatar"),
-            description=self._safe_get(row, "description"), lore=self._safe_get(row, "lore"),
-            personality=self._safe_get(row, "personality"), owner_id=self._safe_get(row, "owner_id"),
-            created_at=row["created_at"]
-        )
-
-    # RP OCs
-    async def create_rp_oc(self, id: str, name: str, avatar: Optional[str], description: Optional[str], lore: Optional[str], personality: Optional[str], owner_id: str) -> bool:
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            result = await conn.execute("INSERT INTO rp_ocs (id, name, avatar, description, lore, personality, owner_id) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-                id, name, avatar, description, lore, personality, owner_id)
-            return bool(result)
-            
-    async def get_rp_ocs_by_owner(self, owner_id: str) -> List[RpOc]:
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            rows = await conn.fetch("SELECT * FROM rp_ocs WHERE owner_id = $1 ORDER BY created_at DESC", owner_id)
-            return [self._row_to_rp_oc(row) for row in rows]
-            
-    async def get_rp_oc_by_id(self, id: str) -> Optional[RpOc]:
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT * FROM rp_ocs WHERE id = $1", id)
-            return self._row_to_rp_oc(row) if row else None
-            
-    async def update_rp_oc(self, id: str, name: str, avatar: Optional[str], description: Optional[str], lore: Optional[str], personality: Optional[str]) -> bool:
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            result = await conn.execute("UPDATE rp_ocs SET name = $1, avatar = $2, description = $3, lore = $4, personality = $5 WHERE id = $6",
-                name, avatar, description, lore, personality, id)
-            return result == "UPDATE 1"
-            
-    def _row_to_rp_chat(self, row) -> RpChat:
-        return RpChat(
-            id=row["id"], bot_id=row["bot_id"], oc_id=self._safe_get(row, "oc_id"),
-            wallpaper=self._safe_get(row, "wallpaper"), model_id=self._safe_get(row, "model_id"),
-            messages=self._safe_get(row, "messages", "[]"), owner_id=row["owner_id"],
-            created_at=row["created_at"], updated_at=row["updated_at"]
-        )
-
-    # RP Chats
-    async def create_rp_chat(self, id: str, bot_id: str, oc_id: Optional[str], model_id: Optional[str], messages: str, owner_id: str) -> bool:
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            result = await conn.execute("INSERT INTO rp_chats (id, bot_id, oc_id, model_id, messages, owner_id) VALUES ($1, $2, $3, $4, $5, $6)",
-                id, bot_id, oc_id, model_id, messages, owner_id)
-            return bool(result)
-            
-    async def get_rp_chats_by_owner(self, owner_id: str) -> List[RpChat]:
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            rows = await conn.fetch("SELECT * FROM rp_chats WHERE owner_id = $1 ORDER BY updated_at DESC", owner_id)
-            return [self._row_to_rp_chat(row) for row in rows]
-            
-    async def get_rp_chat_by_id(self, id: str) -> Optional[RpChat]:
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT * FROM rp_chats WHERE id = $1", id)
-            return self._row_to_rp_chat(row) if row else None
-            
-    async def update_rp_chat(self, id: str, messages: str, wallpaper: Optional[str], model_id: Optional[str], oc_id: Optional[str]) -> bool:
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            result = await conn.execute("UPDATE rp_chats SET messages = $1, wallpaper = $2, model_id = $3, oc_id = $4, updated_at = CURRENT_TIMESTAMP WHERE id = $5",
-                messages, wallpaper, model_id, oc_id, id)
-            return result == "UPDATE 1"
-            
-    async def delete_rp_chat(self, id: str) -> bool:
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            result = await conn.execute("DELETE FROM rp_chats WHERE id = $1", id)
-            return result == "DELETE 1"

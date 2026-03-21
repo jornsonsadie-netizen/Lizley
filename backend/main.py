@@ -27,7 +27,7 @@ from pydantic import BaseModel
 from backend.config import load_settings, Settings
 from backend.database import Database, ApiKeyRecord, create_database, ContentFlagRecord
 from backend.session_secret import get_or_create_session_secret
-from backend.rp_api import rp_router
+
 
 # ==================== Early .env Loading ====================
 # Load .env early so env vars are available at module level (before lifespan)
@@ -114,7 +114,7 @@ class AdminKeyResponse(BaseModel):
     key_prefix: str
     ip_address: str
     discord_email: Optional[str]
-    rp_application: Optional[str]
+
     enabled: bool
     bypass_ip_ban: bool
     current_rpm: int
@@ -168,9 +168,7 @@ class ConfigUpdateRequest(BaseModel):
     max_output_tokens: Optional[int] = None
 
 
-class CompleteSignupRequest(BaseModel):
-    """Request model for completing signup with RP application."""
-    rp_application: str
+
 
 
 class BypassIpRequest(BaseModel):
@@ -444,7 +442,7 @@ async def ensure_usage_reset(key_record: ApiKeyRecord, database: "Database") -> 
             discord_email=key_record.discord_email,
             ip_address=key_record.ip_address,
             browser_fingerprint=key_record.browser_fingerprint,
-            rp_application=key_record.rp_application,
+
             current_rpm=current_rpm,
             current_rpd=current_rpd,
             last_rpm_reset=last_rpm_reset,
@@ -632,7 +630,7 @@ async def validate_api_key(
                 if key_count >= max_keys:
                      raise HTTPException(status_code=429, detail="Maximum number of API keys per IP reached.")
             
-            # Recreate the missing key
+                # Recreate the missing key
             key_prefix = api_key[:11]
             await db.create_api_key(
                 discord_id=f"ip_{client_ip}",
@@ -641,7 +639,6 @@ async def validate_api_key(
                 key_prefix=key_prefix,
                 full_key=api_key,
                 ip_address=client_ip,
-                rp_application="auto-restored",
                 browser_fingerprint=None
             )
             key_record = await db.get_key_by_hash(key_hash)
@@ -1238,7 +1235,6 @@ async def restore_api_key(
             key_prefix=key_prefix,
             full_key=data.full_key,
             ip_address=client_ip,
-            rp_application="auto-restored-ui",
             browser_fingerprint=data.fingerprint
         )
         
@@ -2141,7 +2137,7 @@ async def admin_list_keys(
                 key_prefix=key.key_prefix or "",
                 ip_address=key.ip_address or "",
                 discord_email=key.discord_email,
-                rp_application=getattr(key, "rp_application", None),
+
                 enabled=key.enabled,
                 bypass_ip_ban=getattr(key, "bypass_ip_ban", False),
                 current_rpm=key.current_rpm,
@@ -2240,7 +2236,7 @@ async def admin_enable_key_by_full(
             key_prefix=key_prefix,
             full_key=enable_request.full_key,
             ip_address="127.0.0.1",
-            rp_application="Admin Enabler",
+
             enabled=True
         )
         # Fetch the newly created record
@@ -2759,16 +2755,7 @@ async def serve_admin():
         )
     raise HTTPException(status_code=404, detail="Admin dashboard not found")
 
-@app.get("/rp", include_in_schema=False)
-async def serve_rp():
-    """Serve the LizRP platform rp.html (no-cache to prevent CDN staleness)."""
-    rp_path = FRONTEND_DIR / "rp.html"
-    if rp_path.exists():
-        return FileResponse(
-            str(rp_path), media_type="text/html",
-            headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache"},
-        )
-    raise HTTPException(status_code=404, detail="LizRP platform not found")
+
 
 @app.get("/admin/models", response_model=AdminModelsResponse)
 async def admin_get_models(
@@ -2865,8 +2852,7 @@ async def admin_bulk_model_action(
     else:
         raise HTTPException(status_code=400, detail="Invalid action")
 
-# --- LizRP Router Integration ---
-app.include_router(rp_router)
+
 
 # --- Asset Mounting ---
 # Mount the assets folder explicitly so icons/images are accessible via /assets/

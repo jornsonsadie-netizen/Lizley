@@ -173,7 +173,6 @@ admin_js = admin_js.replace('activeKeys.map', 'keys.map')
 # Fix Discord Email display in the table
 discord_email_html = r'''<td class="discord-email">
                 \$\{escapeHtml\(key\.discord_email \|\| key\.ip_address \|\| 'Unknown'\)\}
-                \$\{key\.rp_application \? `<div class="rp-info">RP: \$\{escapeHtml\(key\.rp_application\.length > 50 \? key\.rp_application\.substring\(0, 50\) \+ '\.\.\.' : key\.rp_application\)\}</div>` : ''\}
             </td>'''
 new_hw_html = r'''<td class="discord-email" title="${escapeHtml(key.browser_fingerprint || 'Unknown Fingerprint')}">
                 ${escapeHtml(key.ip_address)}<br>

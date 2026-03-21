@@ -19,7 +19,6 @@ let lastKeysJson = '';
 let lastLogsJson = '';
 let lastTopJson = '';
 let lastBannedJson = '';
-let lastModelsJson = '';
 
 // DOM Elements
 const passwordModal = document.getElementById('password-modal');
@@ -54,7 +53,6 @@ const noBannedMessage = document.getElementById('no-banned-message');
 const requestLogsEl = document.getElementById('request-logs');
 const topRequestsEl = document.getElementById('top-requests');
 const analyticsContent = document.getElementById('analytics-content');
-let modelsTbody = null;
 
 /**
  * Initialize the admin dashboard
@@ -72,6 +70,7 @@ function init() {
     // Start UTC time update
     updateUtcTime();
     setInterval(updateUtcTime, 1000);
+
 }
 
 /**
@@ -233,7 +232,6 @@ function startAutoRefresh() {
         loadBannedIps(true);
         loadRequestLogs(true);
         loadTopRequests(true);
-        loadModels(true);
     }, REFRESH_INTERVAL);
 }
 
@@ -257,7 +255,6 @@ async function loadAllData() {
         loadBannedIps(),
         loadRequestLogs(),
         loadTopRequests(),
-        loadModels()
     ]);
 }
 
@@ -588,7 +585,7 @@ function displayKeys(keys) {
             <td class="key-prefix">${escapeHtml(key.key_prefix)}</td>
             <td class="discord-email">
                 ${escapeHtml(key.discord_email || key.ip_address || 'Unknown')}
-                ${key.rp_application ? `<div class="rp-info">RP: ${escapeHtml(key.rp_application.length > 50 ? key.rp_application.substring(0, 50) + '...' : key.rp_application)}</div>` : ''}
+
             </td>
             <td>
                 <span class="status-badge ${key.enabled ? 'enabled' : 'disabled'}">
@@ -1126,166 +1123,3 @@ function loadTheme() {
         document.documentElement.setAttribute('data-theme', savedTheme);
     }
 }
-
-
-
-
-
-
-
-
-
-
-// ===================================
-// Model Management
-// ===================================
-
-
-
-
-async function loadModels(silent = false) {
-    if (!modelsTbody) {
-        modelsTbody = document.getElementById('models-tbody');
-    }
-    if (!modelsTbody) return;
-    
-    try {
-        const response = await adminFetch('/admin/models');
-        if (response.ok) {
-            const data = await response.json();
-            const models = data.models || [];
-            
-            // Optimization: Only update DOM if models changed
-            const modelsJson = JSON.stringify(models);
-            if (lastModelsJson === modelsJson) return;
-            lastModelsJson = modelsJson;
-            
-            displayModels(models);
-        } else if (response.status === 401) {
-            logout();
-        } else if (!silent) {
-            logToConsole('Failed to load models', 'error');
-        }
-    } catch (error) {
-        if (!silent) {
-            logToConsole(`Models error: ${error.message}`, 'error');
-        }
-    }
-}
-
-function displayModels(models) {
-    if (!modelsTbody) return;
-    
-    if (!models || models.length === 0) {
-        modelsTbody.innerHTML = '<tr><td colspan="3" class="loading-cell">No models found</td></tr>';
-        return;
-    }
-    
-    modelsTbody.innerHTML = models.map(model => `
-        <tr>
-            <td class="key-prefix">${escapeHtml(model.id)}</td>
-            <td>
-                <div class="alias-container" style="display: flex; gap: 0.5rem; align-items: center;">
-                    <span id="alias-text-${escapeAttr(model.id)}">${model.alias ? escapeHtml(model.alias) : '<em style="color:var(--text-muted)">None</em>'}</span>
-                    <button onclick="editModelAlias('${escapeAttr(model.id)}', '${escapeAttr(model.alias || '')}')" class="btn btn-ghost btn-sm" style="padding: 0.2rem 0.5rem; font-size: 0.8rem;">Edit</button>
-                </div>
-            </td>
-            <td>
-                <span class="status-badge ${model.enabled ? 'enabled' : 'disabled'}">
-                    ${model.enabled ? 'Enabled' : 'Disabled'}
-                </span>
-            </td>
-            <td>
-                <div class="action-buttons">
-                    <button onclick="toggleModel('${model.id}', ${model.enabled})" 
-                            class="btn ${model.enabled ? 'btn-warning' : 'btn-ghost'} btn-sm">
-                        ${model.enabled ? 'Disable' : 'Enable'}
-                    </button>
-                </div>
-            </td>
-        </tr>
-    `).join('');
-}
-
-async function editModelAlias(modelId, currentAlias) {
-    const newAlias = prompt(`Enter new alias for ${modelId} (leave blank to remove):`, currentAlias);
-    if (newAlias === null) return; // Cancelled
-    
-    try {
-        const response = await adminFetch('/admin/models/alias', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model_id: modelId, alias: newAlias })
-        });
-        
-        if (response.ok) {
-            logToConsole(`Alias for ${modelId} updated`, 'success');
-            showAdminStatus(`Alias updated successfully`, 'success');
-            await loadModels(true);
-        } else {
-            const data = await response.json().catch(() => ({}));
-            logToConsole(`Alias update failed: ${data.detail || 'Unknown error'}`, 'error');
-            showAdminStatus(`Target error: ${data.detail}`, 'error');
-        }
-    } catch (error) {
-        logToConsole(`Alias update error: ${error.message}`, 'error');
-    }
-}
-
-async function toggleModel(modelId, currentlyEnabled) {
-    try {
-        const response = await adminFetch('/admin/models/toggle', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model_id: modelId, enabled: !currentlyEnabled })
-        });
-        
-        if (response.ok) {
-            logToConsole(`Model ${modelId} ${currentlyEnabled ? 'disabled' : 'enabled'}`, 'success');
-            showAdminStatus(`Model ${modelId} updated successfully`, 'success');
-            await loadModels();
-        } else {
-            const data = await response.json().catch(() => ({}));
-            logToConsole(`Model toggle failed: ${data.detail || 'Unknown error'}`, 'error');
-        }
-    } catch (error) {
-        logToConsole(`Model toggle error: ${error.message}`, 'error');
-    }
-}
-
-async function bulkModelAction(action) {
-    const confirmMsg = action === 'disable_all' 
-        ? 'Are you sure you want to disable ALL models? Users will not be able to use any models.'
-        : 'Enable all models?';
-        
-    if (!confirm(confirmMsg)) return;
-    
-    try {
-        const response = await adminFetch('/admin/models/bulk-action', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action })
-        });
-        
-        if (response.ok) {
-            logToConsole(`Bulk action '${action}' completed`, 'success');
-            showAdminStatus('Bulk action completed successfully', 'success');
-            await loadModels();
-        } else {
-            const data = await response.json().catch(() => ({}));
-            logToConsole(`Bulk action failed: ${data.detail || 'Unknown error'}`, 'error');
-        }
-    } catch (error) {
-        logToConsole(`Bulk action error: ${error.message}`, 'error');
-    }
-}
-
-
-// ===================================
-// Initialization
-// ===================================
-
-document.addEventListener('DOMContentLoaded', () => {
-    loadTheme();
-    init();
-});

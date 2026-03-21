@@ -17,6 +17,16 @@
     <!-- Styles -->
     <link rel="stylesheet" href="/static/style.css?v=20260320_v2">
     <link rel="stylesheet" href="/static/admin.css?v=20260320_v2">
+    <style>
+        /* Toggle Switch Fallback */
+        .switch { position: relative; display: inline-block; width: 40px; height: 20px; vertical-align: middle; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; inset: 0; background-color: #ccc; transition: .4s; border-radius: 20px; }
+        .slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
+        input:checked + .slider { background-color: #ff85a1; }
+        input:checked + .slider:before { transform: translateX(20px); }
+        .toggle-group { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; }
+    </style>
 </head>
 
 <body>
@@ -132,39 +142,6 @@
             </div>
         </section>
 
-        <!-- Model Management Section -->
-        <section class="admin-section card">
-            <div class="section-header">
-                <h2>Model Management</h2>
-                <div class="header-actions">
-                    <button onclick="bulkModelAction('enable_all')" class="btn btn-ghost btn-sm">Enable All</button>
-                    <button onclick="bulkModelAction('disable_all')" class="btn btn-warning btn-sm">Disable All</button>
-                    <button onclick="loadModels()" class="btn btn-ghost btn-sm">Refresh</button>
-                </div>
-            </div>
-            
-            <p class="form-hint" style="margin-bottom: var(--space-sm);">
-                Control which models are visible to users. Disabled models will return 403 Forbidden.
-            </p>
-
-            <div class="table-container scrollable-table" style="max-height: 400px;">
-                <table id="models-table" class="admin-table">
-                    <thead>
-                        <tr>
-                            <th>Model ID</th>
-                            <th>Alias</th>
-                            <th>Status</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody id="models-tbody">
-                        <tr>
-                            <td colspan="3" class="loading-cell">Loading...</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-        </section>
 
         <!-- Customer Key Enabler Section -->
         <section class="admin-section card enabler-sanctuary">
