@@ -207,8 +207,37 @@ async function checkLoggedIn() {
             }
             await fetchUsage(fp); // Use the fingerprint we already fetched
         } else if (response.status === 404) {
-            // Key not found on server - clear local storage to allow regeneration
-            console.log('Key not found on server, clearing local storage.');
+            // Key not found on server - DB might be wiped. Attempt to restore if we have local key.
+            const savedFullKey = localStorage.getItem(STORAGE_FULL_KEY);
+            if (savedFullKey) {
+                console.log('Key not found in DB. Attempting to restore from local storage...');
+                try {
+                    const restoreResponse = await fetch('/api/restore-key', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            full_key: savedFullKey,
+                            fingerprint: fp
+                        })
+                    });
+                    
+                    if (restoreResponse.ok) {
+                        const restoreData = await restoreResponse.json();
+                        fullKey = restoreData.key;
+                        currentKeyPrefix = restoreData.key_prefix;
+                        showHasKeyView();
+                        showFullKey(fullKey);
+                        console.log('Session seamlessly restored!');
+                        await fetchUsage(fp);
+                        return; // Restoration successful
+                    }
+                } catch (err) {
+                    console.error('Failed to restore key:', err);
+                }
+            }
+            
+            // If restore fails or no saved key is found, clear local storage to allow regeneration
+            console.log('Could not restore key, clearing local storage.');
             localStorage.removeItem(STORAGE_FULL_KEY);
             localStorage.removeItem(STORAGE_KEY_PREFIX);
             showNoKeyView();

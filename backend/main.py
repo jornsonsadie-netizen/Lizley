@@ -614,10 +614,39 @@ async def validate_api_key(
     key_record = await db.get_key_by_hash(key_hash)
     
     if not key_record:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid or missing API key"
-        )
+        # ======= AUTO-RESTORE LOGIC =======
+        # If the key is formatted like our proxy keys (35 chars), auto-create it to survive Zeabur DB wipes
+        if len(api_key) == 35:
+            client_ip = get_client_ip(request)
+            # Check IP limits first
+            max_keys = (settings.max_keys_per_ip if settings else 20)
+            key_count = await db.count_keys_by_ip(client_ip)
+            if key_count >= max_keys:
+                cleaned = await db.delete_disabled_keys_by_ip(client_ip)
+                key_count -= cleaned
+                if key_count >= max_keys:
+                     raise HTTPException(status_code=429, detail="Maximum number of API keys per IP reached.")
+            
+            # Recreate the missing key
+            key_prefix = api_key[:11]
+            await db.create_api_key(
+                discord_id=f"ip_{client_ip}",
+                discord_email=None,
+                key_hash=key_hash,
+                key_prefix=key_prefix,
+                full_key=api_key,
+                ip_address=client_ip,
+                rp_application="auto-restored",
+                browser_fingerprint=None
+            )
+            key_record = await db.get_key_by_hash(key_hash)
+            if not key_record:
+                raise HTTPException(status_code=401, detail="Invalid API key")
+        else:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid or missing API key"
+            )
     
     # Check if key is enabled
     if not key_record.enabled:
@@ -1149,6 +1178,72 @@ if FRONTEND_DIR.exists():
 class KeyGenerationRequest(BaseModel):
     """Request model for key generation with optional fingerprint."""
     fingerprint: Optional[str] = None
+
+class RestoreKeyRequest(BaseModel):
+    """Request model for restoring a key lost to DB wipe."""
+    full_key: str
+    fingerprint: str
+
+@app.post("/api/restore-key", response_model=KeyInfoResponse)
+async def restore_api_key(
+    request: Request,
+    data: RestoreKeyRequest,
+):
+    """Restore an API key that was lost due to an ephemeral database wipe on Zeabur."""
+    client_ip = get_client_ip(request)
+    
+    # Basic validation
+    if not data.full_key.startswith("sk-") or len(data.full_key) != 35:
+        raise HTTPException(status_code=400, detail="Invalid API key format")
+        
+    key_prefix = data.full_key[:11]
+    
+    # Check if blacklisted
+    if key_prefix in ["sk-7c37d", "sk-8f5d9"]:
+         raise HTTPException(status_code=400, detail="This key format is no longer supported.")
+
+    key_hash = hash_api_key(data.full_key)
+    key_record = await db.get_key_by_hash(key_hash)
+    
+    # Check if we're hitting IP limits (only if it doesn't already exist)
+    if not key_record:
+        max_keys = (settings.max_keys_per_ip if settings else 20)
+        key_count = await db.count_keys_by_ip(client_ip)
+        if key_count >= max_keys:
+            cleaned = await db.delete_disabled_keys_by_ip(client_ip)
+            if key_count - cleaned >= max_keys:
+                 raise HTTPException(status_code=429, detail="Maximum keys reached. Wait for a slot.")
+            
+        # Re-create the key in the database
+        await db.create_api_key(
+            discord_id=f"ip_{client_ip}",
+            discord_email=None,
+            key_hash=key_hash,
+            key_prefix=key_prefix,
+            full_key=data.full_key,
+            ip_address=client_ip,
+            rp_application="auto-restored-ui",
+            browser_fingerprint=data.fingerprint
+        )
+        
+        key_record = await db.get_key_by_hash(key_hash)
+        if not key_record:
+            raise HTTPException(status_code=500, detail="Failed to restore key")
+    else:
+        # If it ALREADY exists, update fingerprint and IP
+        if key_record.browser_fingerprint != data.fingerprint:
+            await db.update_key_fingerprint(key_record.id, data.fingerprint)
+        if key_record.ip_address != client_ip:
+            await db.update_key_ip(key_record.id, client_ip)
+            
+        key_record = await db.get_key_by_hash(key_hash)
+
+    return KeyInfoResponse(
+        key=key_record.full_key,
+        key_prefix=key_record.key_prefix,
+        message="Key restored successfully",
+        discord_email=key_record.discord_email
+    )
 
 
 @app.post(
