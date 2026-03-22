@@ -1205,7 +1205,7 @@ class RestoreKeyRequest(BaseModel):
     full_key: str
     fingerprint: str
 
-@app.post("/api/restore-key", response_model=KeyInfoResponse)
+@app.post("/api/restore-key", response_model=KeyGenerationResponse)
 async def restore_api_key(
     request: Request,
     data: RestoreKeyRequest,
@@ -1258,7 +1258,7 @@ async def restore_api_key(
             
         key_record = await db.get_key_by_hash(key_hash)
 
-    return KeyInfoResponse(
+    return KeyGenerationResponse(
         key=key_record.full_key,
         key_prefix=key_record.key_prefix,
         message="Key restored successfully",

@@ -236,11 +236,17 @@ async function checkLoggedIn() {
                 }
             }
             
-            // If restore fails or no saved key is found, clear local storage to allow regeneration
-            console.log('Could not restore key, clearing local storage.');
-            localStorage.removeItem(STORAGE_FULL_KEY);
-            localStorage.removeItem(STORAGE_KEY_PREFIX);
-            showNoKeyView();
+            // If restore fails or no saved key is found
+            if (!savedFullKey) {
+                console.log('No local key to restore.');
+                showNoKeyView();
+            } else {
+                // If restoreResponse was called and failed
+                // Only clear localStorage if the server explicitly says the key is invalid (400)
+                // If it's a 500/502/etc, it's a server hiccup, so KEEP the key for next refresh.
+                console.log('Restore attempt failed. Keeping local storage for retry unless rejected by server.');
+                showNoKeyView();
+            }
         } else {
             // OTHER ERROR (500, etc.): FALLBACK to localStorage if we have it
             const savedFullKey = localStorage.getItem(STORAGE_FULL_KEY);
