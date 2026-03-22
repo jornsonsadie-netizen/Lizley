@@ -58,11 +58,19 @@ def load_settings(env_path: Optional[str] = None) -> Settings:
     else:
         target_api_key = ""  # Will be set via admin dashboard
     
+    # Helper to parse ints safely
+    def get_int_env(key: str, default: int) -> int:
+        val = os.getenv(key, str(default)).strip()
+        try:
+            return int(val) if val else default
+        except ValueError:
+            return default
+
     # Optional settings with defaults (also strip whitespace)
     target_api_url = os.getenv("TARGET_API_URL", "https://api.openai.com/v1").strip()
-    port = int(os.getenv("PORT", "8000").strip())
-    max_context = int(os.getenv("MAX_CONTEXT", "128000").strip())
-    max_output_tokens = int(os.getenv("MAX_OUTPUT_TOKENS", "4096").strip())
+    port = get_int_env("PORT", 8000)
+    max_context = get_int_env("MAX_CONTEXT", 128000)
+    max_output_tokens = get_int_env("MAX_OUTPUT_TOKENS", 4096)
     max_output_tokens = max(1, min(max_output_tokens, 128000))  # Clamp 1–128000
     default_db = "/tmp/proxy.db" if os.environ.get("ZEABUR") or os.environ.get("VERCEL") else "./proxy.db"
     database_path = os.getenv("DATABASE_PATH", default_db).strip()
@@ -73,7 +81,7 @@ def load_settings(env_path: Optional[str] = None) -> Settings:
         database_url = database_url.strip()
     
     # Abuse protection: max API keys per IP (default 20)
-    max_keys_per_ip = int(os.getenv("MAX_KEYS_PER_IP", "20").strip())
+    max_keys_per_ip = get_int_env("MAX_KEYS_PER_IP", 20)
     max_keys_per_ip = max(1, min(max_keys_per_ip, 100))  # Relax clamp to 1–100
     
     return Settings(
