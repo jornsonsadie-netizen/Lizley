@@ -875,6 +875,11 @@ def normalize_target_api_url(target_api_url: str) -> str:
     url = (target_api_url or "").strip().rstrip("/")
     if not url:
         return ""
+        
+    # Prevent user error: putting the full chat completion endpoint instead of the base URL
+    if url.endswith("/chat/completions"):
+        url = url[:-17]
+        
     if url.endswith("/v1"):
         return url
     return f"{url}/v1"
