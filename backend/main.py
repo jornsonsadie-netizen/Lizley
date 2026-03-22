@@ -136,6 +136,7 @@ class AdminModelInfo(BaseModel):
 
 class AdminModelsResponse(BaseModel):
     models: List[AdminModelInfo]
+    persistence_warning: bool = False
 
 
 class ToggleModelRequest(BaseModel):
@@ -2797,10 +2798,16 @@ async def admin_get_models(
                 alias=aliases.get(model_id)
             ))
             
-        # Sort: enabled first, then by id
-        models_info.sort(key=lambda x: (not x.enabled, x.id))
+        # Sort solely by ID for UI stability (avoid jumping boxes when toggling)
+        models_info.sort(key=lambda x: x.id)
         
-        return AdminModelsResponse(models=models_info)
+        # Add a persistence warning for Vercel/SQLite users
+        is_ephemeral = (os.environ.get("VERCEL") or os.environ.get("ZEABUR")) and not settings.database_url
+        
+        return {
+            "models": [m.model_dump() if hasattr(m, "model_dump") else m.dict() for m in models_info],
+            "persistence_warning": is_ephemeral
+        }
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Failed to fetch models from upstream: {str(e)}")
 

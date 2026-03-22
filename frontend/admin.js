@@ -1050,6 +1050,16 @@ async function loadModels() {
         if (response.ok) {
             const data = await response.json();
             renderModelsTable(data.models);
+            
+            // Show/hide persistence warning for Vercel users
+            const warningEl = document.getElementById('models-persistence-warning');
+            if (warningEl) {
+                if (data.persistence_warning) {
+                    warningEl.classList.remove('hidden');
+                } else {
+                    warningEl.classList.add('hidden');
+                }
+            }
         } else if (response.status === 401) {
             logout();
         } else {
@@ -1134,7 +1144,7 @@ async function toggleModel(modelId, checkbox) {
         
         const data = await response.json();
         logToConsole(`Model ${modelId} ${enabled ? 'enabled' : 'disabled'}`, 'info');
-        loadModels(); // Refresh to ensure sync
+        // REMOVED: loadModels(); // Avoid jarring re-sort/re-render on every toggle
     } catch (error) {
         logToConsole(`Failed to toggle model: ${error.message}`, 'error');
         // Revert UI on failure
