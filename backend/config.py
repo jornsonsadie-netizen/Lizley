@@ -68,7 +68,7 @@ def load_settings(env_path: Optional[str] = None) -> Settings:
             return 32768
 
     # Optional settings with defaults (also strip whitespace)
-    target_api_url = os.getenv("TARGET_API_URL", "https://api.shuttleai.com/v1").strip()
+    target_api_url = os.getenv("TARGET_API_URL", "https://breakout.wenwen-ai.com/v1").strip()
     port = get_int_env("PORT", 8000)
     max_context = get_int_env("MAX_CONTEXT", 32768)
     max_context = min(max_context, 32768)  # Hard cap at 32k as requested
