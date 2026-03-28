@@ -270,8 +270,8 @@ class RateLimitResult:
 # ==================== Constants ====================
 
 RPM_LIMIT = 4
-RPD_LIMIT = 200  # Request count (display only; daily limit is request-based)
-REQUESTS_PER_DAY_LIMIT = 200  # Daily request quota per key (enforced)
+RPD_LIMIT = 110  # Request count (display only; daily limit is request-based)
+REQUESTS_PER_DAY_LIMIT = 110  # Daily request quota per key (enforced)
 RPM_WINDOW_SECONDS = 60
 MAX_TOKENS_PER_SECOND = 35  # Maximum tokens per second for streaming
 
