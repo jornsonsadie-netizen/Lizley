@@ -453,7 +453,7 @@ async def check_rate_limits(
     key_record = await ensure_usage_reset(key_record, database)
     
     now = datetime.now(timezone.utc)
-    seconds_since_rpm_reset = (now - key_record.last_rpm_reset.replace(tzinfo=timezone.utc) if key_record.last_rpm_reset.tzinfo is None else key_record.last_rpm_reset).total_seconds()
+    seconds_since_rpm_reset = (now - (key_record.last_rpm_reset.replace(tzinfo=timezone.utc) if key_record.last_rpm_reset.tzinfo is None else key_record.last_rpm_reset)).total_seconds()
 
     # Check RPM limit
     if key_record.current_rpm >= RPM_LIMIT:
