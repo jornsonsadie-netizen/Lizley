@@ -15,6 +15,9 @@ from typing import Optional, Tuple, AsyncGenerator, List, Dict, Any
 
 import httpx
 import codecs
+import json as json_module
+import time
+import asyncio
 from fastapi import FastAPI, Request, HTTPException, Depends, Header, Response, Cookie
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse, RedirectResponse
@@ -1633,9 +1636,6 @@ async def _handle_emulated_streaming_request(
     client_ip: str,
 ):
     """Handles streaming by fetching the full response and emulating a stream."""
-    import json as json_module
-    import time
-    import asyncio
     
     # Ensure upstream request is NOT streaming
     emulated_body = request_body.copy()
