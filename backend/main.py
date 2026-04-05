@@ -1841,80 +1841,80 @@ async def _handle_streaming_request(
                 yield f"data: {json_module.dumps(error_response)}\n\n".encode('utf-8')
                 yield b"data: [DONE]\n\n"
                 return
+            
+            # Success - increment daily request count (RPD)
+            # (Proactive RPM increment already happened in proxy_chat_completions)
+            print(f"[Auth] Incrementing RPD for key {key_record.key_prefix}")
+            await db.increment_rpd_only(key_record.id)
+            
+            # True streaming - forward each chunk immediately
+            decoder = codecs.getincrementaldecoder("utf-8")()
+            async for chunk in response.aiter_bytes():
+                # Count tokens in this chunk for TPS limiting
+                chunk_tokens = 0
+                try:
+                    chunk_str = decoder.decode(chunk, final=False)
+                    if chunk_str:
+                        # Process each line in the decoded string
+                        for line in chunk_str.split('\n'):
+                            if line.startswith('data: ') and line != 'data: [DONE]':
+                                data_str = line[6:]
+                                if data_str.strip():
+                                    try:
+                                        data = json_module.loads(data_str)
+                                        # Count tokens from delta content
+                                        if 'choices' in data:
+                                            for choice in data['choices']:
+                                                delta = choice.get('delta', {})
+                                                content = delta.get('content', '')
+                                                if content:
+                                                    # Rough estimate: 1 token ≈ 4 chars
+                                                    chunk_tokens += max(1, len(content) // 4)
+                                        # Extract final usage stats
+                                        if 'usage' in data:
+                                            input_tokens_actual = data['usage'].get('prompt_tokens', token_count)
+                                            output_tokens = data['usage'].get('completion_tokens', 0)
+                                            total_tokens = data['usage'].get('total_tokens', token_count)
+                                        if 'error' in data:
+                                            error_message = data['error'].get('message') or str(data['error'])
+                                            stream_success = False
+                                    except json_module.JSONDecodeError:
+                                        pass
+                except UnicodeDecodeError:
+                    chunk_tokens = 1  # Assume at least 1 token for binary chunks
                 
-                # Success - increment daily request count (RPD)
-                # (Proactive RPM increment already happened in proxy_chat_completions)
-                print(f"[Auth] Incrementing RPD for key {key_record.key_prefix}")
-                await db.increment_rpd_only(key_record.id)
+                # TPS rate limiting - only throttle if we're going too fast
+                current_time = time.monotonic()
+                if current_time - last_second >= 1.0:
+                    # New second, reset counter
+                    tokens_this_second = 0
+                    last_second = current_time
                 
-                # True streaming - forward each chunk immediately
-                decoder = codecs.getincrementaldecoder("utf-8")()
-                async for chunk in response.aiter_bytes():
-                    # Count tokens in this chunk for TPS limiting
-                    chunk_tokens = 0
-                    try:
-                        chunk_str = decoder.decode(chunk, final=False)
-                        if chunk_str:
-                            # Process each line in the decoded string
-                            for line in chunk_str.split('\n'):
-                                if line.startswith('data: ') and line != 'data: [DONE]':
-                                    data_str = line[6:]
-                                    if data_str.strip():
-                                        try:
-                                            data = json_module.loads(data_str)
-                                            # Count tokens from delta content
-                                            if 'choices' in data:
-                                                for choice in data['choices']:
-                                                    delta = choice.get('delta', {})
-                                                    content = delta.get('content', '')
-                                                    if content:
-                                                        # Rough estimate: 1 token ≈ 4 chars
-                                                        chunk_tokens += max(1, len(content) // 4)
-                                            # Extract final usage stats
-                                            if 'usage' in data:
-                                                input_tokens_actual = data['usage'].get('prompt_tokens', token_count)
-                                                output_tokens = data['usage'].get('completion_tokens', 0)
-                                                total_tokens = data['usage'].get('total_tokens', token_count)
-                                            if 'error' in data:
-                                                error_message = data['error'].get('message') or str(data['error'])
-                                                stream_success = False
-                                        except json_module.JSONDecodeError:
-                                            pass
-                    except UnicodeDecodeError:
-                        chunk_tokens = 1  # Assume at least 1 token for binary chunks
-                    
-                    # TPS rate limiting - only throttle if we're going too fast
-                    current_time = time.monotonic()
-                    if current_time - last_second >= 1.0:
-                        # New second, reset counter
-                        tokens_this_second = 0
-                        last_second = current_time
-                    
-                    tokens_this_second += max(1, chunk_tokens)
-                    
-                    # If we've exceeded TPS limit, add a small delay
-                    if tokens_this_second > MAX_TOKENS_PER_SECOND:
-                        # Calculate how long to wait
-                        wait_time = 1.0 - (current_time - last_second)
-                        if wait_time > 0:
-                            await asyncio.sleep(wait_time)
-                        tokens_this_second = max(1, chunk_tokens)
-                        last_second = time.monotonic()
-                    
-                    # Yield chunk immediately (true streaming)
-                    yield chunk
+                tokens_this_second += max(1, chunk_tokens)
                 
-                # Log usage after stream completes
-                await db.log_usage(
-                    key_id=key_record.id,
-                    model=request_body.get("model", "unknown"),
-                    tokens=total_tokens,
-                    success=stream_success,
-                    ip_address=client_ip,
-                    input_tokens=input_tokens_actual,
-                    output_tokens=output_tokens,
-                    error_message=error_message,
-                )
+                # If we've exceeded TPS limit, add a small delay
+                if tokens_this_second > MAX_TOKENS_PER_SECOND:
+                    # Calculate how long to wait
+                    wait_time = 1.0 - (current_time - last_second)
+                    if wait_time > 0:
+                        await asyncio.sleep(wait_time)
+                    tokens_this_second = max(1, chunk_tokens)
+                    last_second = time.monotonic()
+                
+                # Yield chunk immediately (true streaming)
+                yield chunk
+            
+            # Log usage after stream completes
+            await db.log_usage(
+                key_id=key_record.id,
+                model=request_body.get("model", "unknown"),
+                tokens=total_tokens,
+                success=stream_success,
+                ip_address=client_ip,
+                input_tokens=input_tokens_actual,
+                output_tokens=output_tokens,
+                error_message=error_message,
+            )
         except httpx.TimeoutException as e:
             print(f"[Upstream Timeout] {str(e)}")
             await db.log_usage(
