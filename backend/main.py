@@ -1852,40 +1852,48 @@ async def _handle_streaming_request(
             
             # True streaming - forward each chunk immediately
             decoder = codecs.getincrementaldecoder("utf-8")()
+            buffer = ""
             async for chunk in response.aiter_bytes():
                 # Count tokens in this chunk for TPS limiting
                 chunk_tokens = 0
                 try:
                     chunk_str = decoder.decode(chunk, final=False)
                     if chunk_str:
-                        # Process each line in the decoded string
-                        for line in chunk_str.split('\n'):
-                            line = line.strip()
-                            if line.startswith('data:'):
-                                data_str = line[5:].strip()
-                                if data_str == '[DONE]':
-                                    continue
-                                if data_str:
-                                    try:
-                                        data = json_module.loads(data_str)
-                                        # Count tokens from delta content
-                                        if 'choices' in data:
-                                            for choice in data['choices']:
-                                                delta = choice.get('delta', {})
-                                                content = delta.get('content', '')
-                                                if content:
-                                                    # Rough estimate: 1 token ≈ 4 chars
-                                                    chunk_tokens += max(1, len(content) // 4)
-                                        # Extract final usage stats
-                                        if 'usage' in data:
-                                            input_tokens_actual = data['usage'].get('prompt_tokens', token_count)
-                                            output_tokens = data['usage'].get('completion_tokens', 0)
-                                            total_tokens = data['usage'].get('total_tokens', token_count)
-                                        if 'error' in data:
-                                            error_message = data['error'].get('message') or str(data['error'])
-                                            stream_success = False
-                                    except json_module.JSONDecodeError:
-                                        pass
+                        buffer += chunk_str
+                        if '\n' in buffer:
+                            lines = buffer.split('\n')
+                            buffer = lines.pop() # Keep the last partial line
+                            
+                            for line in lines:
+                                line = line.strip()
+                                if line.startswith('data:'):
+                                    data_str = line[5:].strip()
+                                    if data_str == '[DONE]':
+                                        continue
+                                    if data_str:
+                                        try:
+                                            data = json_module.loads(data_str)
+                                            # Count tokens from delta content
+                                            if 'choices' in data:
+                                                for choice in data['choices']:
+                                                    delta = choice.get('delta', {})
+                                                    content = delta.get('content', '')
+                                                    if content:
+                                                        # Rough estimate: 1 token ≈ 4 chars
+                                                        chunk_tokens += max(1, len(content) // 4)
+                                            # Extract final usage stats (with null check for NVIDIA NIM)
+                                            if 'usage' in data and data['usage']:
+                                                try:
+                                                    input_tokens_actual = data['usage'].get('prompt_tokens', input_tokens_actual)
+                                                    output_tokens = data['usage'].get('completion_tokens', output_tokens)
+                                                    total_tokens = data['usage'].get('total_tokens', total_tokens)
+                                                except (AttributeError, TypeError):
+                                                    pass
+                                            if 'error' in data:
+                                                error_message = data['error'].get('message') or str(data['error'])
+                                                stream_success = False
+                                        except json_module.JSONDecodeError:
+                                            pass
                 except UnicodeDecodeError:
                     chunk_tokens = 1  # Assume at least 1 token for binary chunks
                 
