@@ -996,6 +996,12 @@ class SQLiteDatabase(Database):
         await conn.commit()
         return cursor.rowcount
 
+    async def get_keys_by_ip(self, ip_address: str) -> List[ApiKeyRecord]:
+        conn = await self._get_connection()
+        cursor = await conn.execute("SELECT * FROM api_keys WHERE ip_address = ?", (ip_address,))
+        rows = await cursor.fetchall()
+        return [self._row_to_key_record(row) for row in rows]
+
     async def get_config(self) -> Optional[ProxyConfig]:
         conn = await self._get_connection()
         cursor = await conn.execute("SELECT * FROM proxy_config WHERE id = 1")
@@ -1828,6 +1834,12 @@ class PostgreSQLDatabase(Database):
                 return int(result.split()[-1])
             except (ValueError, IndexError):
                 return 0
+
+    async def get_keys_by_ip(self, ip_address: str) -> List[ApiKeyRecord]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("SELECT * FROM api_keys WHERE ip_address = $1", ip_address)
+            return [self._row_to_key_record(dict(row)) for row in rows]
 
     async def get_config(self) -> Optional[ProxyConfig]:
         pool = await self._get_pool()

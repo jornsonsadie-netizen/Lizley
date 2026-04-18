@@ -29,7 +29,7 @@ import re
 # authlib OAuth removed — Discord login is no longer used
 
 from backend.config import load_settings, Settings
-from backend.database import Database, ApiKeyRecord, create_database, ContentFlagRecord
+from backend.database import Database, ApiKeyRecord, create_database, ContentFlagRecord, BannedIpRecord, BannedUserRecord
 from backend.session_secret import get_or_create_session_secret
 from backend.context_curator import maybe_curate_context, _estimate_tokens as _cc_estimate_tokens
 
