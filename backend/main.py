@@ -287,6 +287,9 @@ MAX_TOKENS_PER_SECOND = 100  # Maximum tokens per second for streaming (increase
 # Fast in-memory cache to prevent CPU-intensive DB lookups during attacks
 BANNED_IPS_CACHE: set[str] = set()
 
+# Cache for VPN detection to avoid redundant API calls (IP -> is_vpn_bool)
+VPN_CACHE: Dict[str, bool] = {}
+
 # Common paths scanned by bots/attackers. Touching these = Instant Ban.
 HONEYPOT_PATHS = {
     "/.env", "/.git", "/.git/config", "/wp-login.php", "/xmlrpc.php", 
@@ -563,6 +566,35 @@ async def check_ip_ban(request: Request) -> str:
     return client_ip
 
 
+async def is_vpn_or_proxy(ip: str) -> bool:
+    """Check if an IP address belongs to a VPN or Proxy service.
+    
+    Uses ip-api.com (free tier). Results are cached per-session.
+    """
+    if not ip or ip == "unknown" or ip == "127.0.0.1":
+        return False
+        
+    # Check cache first
+    if ip in VPN_CACHE:
+        return VPN_CACHE[ip]
+        
+    try:
+        # Query ip-api.com for proxy/hosting flags
+        # Free tier limit: 45 requests per minute
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"http://ip-api.com/json/{ip}?fields=status,proxy,hosting,message")
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("status") == "success":
+                    is_vpn = data.get("proxy", False) or data.get("hosting", False)
+                    VPN_CACHE[ip] = is_vpn
+                    return is_vpn
+    except Exception as e:
+        print(f"[VPN Detection] API Error for {ip}: {e}")
+        
+    return False
+
+
 async def fast_ban_ip(ip: str, reason: str):
     """Ban an IP in both the database and the in-memory cache,
     and revoke all users/keys associated with this IP."""
@@ -699,8 +731,27 @@ async def validate_api_key(
             detail="This API key has been disabled"
         )
     
-    # Check if IP is banned (skip for keys with bypass_ip_ban set by admin)
+    # [STRICT IP LOCK & VPN BLOCK]
+    # Check if the IP has changed or is a VPN
     client_ip = get_client_ip(request)
+    
+    # 1. IP Lock Check: Each key is for only one IP
+    if not key_record.bypass_ip_ban and key_record.ip_address != client_ip:
+        print(f"[Auth] IP Lock Violation: Key {key_record.key_prefix} (Owner {key_record.discord_id}) accessed from {client_ip} (Original: {key_record.ip_address})")
+        raise HTTPException(
+            status_code=403,
+            detail="Why are you using a VPN? Turn it off."
+        )
+        
+    # 2. Proactive VPN Check (for the current IP, even if it matches or is newly assigned)
+    if not key_record.bypass_ip_ban and await is_vpn_or_proxy(client_ip):
+        print(f"[Auth] VPN Detected: {client_ip} is flagged as proxy/hosting.")
+        raise HTTPException(
+            status_code=403,
+            detail="Why are you using a VPN? Turn it off."
+        )
+
+    # Check if IP is banned (fallback database check)
     if not key_record.bypass_ip_ban and await db.is_ip_banned(client_ip):
         print(f"[Auth] Access denied: IP {client_ip} is banned. (Key: {key_hash[:8]})")
         raise HTTPException(
@@ -1158,11 +1209,9 @@ async def get_key_for_request(
         key_record = await db.get_key_by_fingerprint(fingerprint)
         if key_record:
             print(f"[Auth] Fingerprint match found for key: {key_record.key_prefix}")
-            # If IP changed but fingerprint matched, update IP for this key
-            if key_record.ip_address != client_ip:
-                print(f"[Auth] IP migration: Key {key_record.key_prefix} moved to {client_ip} (Fingerprint match)")
-                await db.update_key_ip(key_record.id, client_ip)
-            # We found a match by fingerprint, skip IP-based lookup
+            # [STRICT IP LOCK] We no longer auto-update IP here.
+            # We just return the key and let validate_api_key handle the mismatch logic.
+            pass
     
     # 2. Try IP-based lookup (fallback) only if no fingerprint match was found
     if not key_record:
@@ -1214,6 +1263,10 @@ async def restore_api_key(
     """Restore an API key that was lost due to an ephemeral database wipe on Zeabur."""
     client_ip = get_client_ip(request)
     
+    # [STRICT VPN BLOCK] Check for VPN/Proxy on current IP
+    if await is_vpn_or_proxy(client_ip):
+         raise HTTPException(status_code=403, detail="Why are you using a VPN? Turn it off.")
+
     # Basic validation
     if not data.full_key.startswith("sk-") or len(data.full_key) != 35:
         raise HTTPException(status_code=400, detail="Invalid API key format")
@@ -1284,6 +1337,10 @@ async def generate_key_endpoint(
     """
     fingerprint = gen_request.fingerprint
     
+    # [STRICT VPN BLOCK] Check for VPN/Proxy on current IP
+    if await is_vpn_or_proxy(client_ip):
+         raise HTTPException(status_code=403, detail="Why are you using a VPN? Turn it off.")
+
     # Proactively purge any disabled keys for this fingerprint/IP
     # This ensures that "Your API key is disabled" errors are resolved by deletion
     if fingerprint:
