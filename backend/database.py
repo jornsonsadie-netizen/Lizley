@@ -1000,7 +1000,7 @@ class SQLiteDatabase(Database):
         conn = await self._get_connection()
         cursor = await conn.execute("SELECT * FROM api_keys WHERE ip_address = ?", (ip_address,))
         rows = await cursor.fetchall()
-        return [self._row_to_key_record(row) for row in rows]
+        return [self._row_to_api_key(row) for row in rows]
 
     async def get_config(self) -> Optional[ProxyConfig]:
         conn = await self._get_connection()
@@ -1839,7 +1839,7 @@ class PostgreSQLDatabase(Database):
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch("SELECT * FROM api_keys WHERE ip_address = $1", ip_address)
-            return [self._row_to_key_record(dict(row)) for row in rows]
+            return [self._row_to_api_key(row) for row in rows]
 
     async def get_config(self) -> Optional[ProxyConfig]:
         pool = await self._get_pool()

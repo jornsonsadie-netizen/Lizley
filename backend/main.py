@@ -1127,41 +1127,45 @@ class AdvancedDDoSProtectionMiddleware(BaseHTTPMiddleware):
     """Extremely fast middleware to reject bad traffic before it hits CPU-heavy logic."""
     
     async def dispatch(self, request: Request, call_next):
-        client_ip = get_client_ip(request)
-        path = request.url.path
-        
-        # 1. Fast Cache Check (0.01ms)
-        if client_ip in BANNED_IPS_CACHE:
-            return Response(
-                status_code=403, 
-                content="Your IP is permanently banned for suspicious activity.",
-                media_type="text/plain"
-            )
+        try:
+            client_ip = get_client_ip(request)
+            path = request.url.path
             
-        # 2. Honeypot check (Check if path is in the forbidden list)
-        if path in HONEYPOT_PATHS or any(p in path for p in [".env", ".git", "wp-login"]):
-            await fast_ban_ip(client_ip, f"Honeypot hit: {path}")
-            return Response(status_code=403, content="Suspicious request detected. Your IP has been banned.")
+            # 1. Fast Cache Check (0.01ms)
+            if client_ip in BANNED_IPS_CACHE:
+                return Response(
+                    status_code=403, 
+                    content="Your IP is permanently banned for suspicious activity.",
+                    media_type="text/plain"
+                )
+                
+            # 2. Honeypot check
+            if path in HONEYPOT_PATHS or any(p in path for p in [".env", ".git", "wp-login"]):
+                await fast_ban_ip(client_ip, f"Honeypot hit: {path}")
+                return Response(status_code=403, content="Suspicious request detected. Your IP has been banned.")
 
-        # 3. User-Agent filtering
-        user_agent = request.headers.get("user-agent", "").lower()
-        if not user_agent:
-            # Most bots don't bother with a UA
-            return Response(status_code=403, content="Missing User-Agent header.")
-            
-        for pattern in BLOCKED_UA_PATTERNS:
-            if re.search(pattern, user_agent):
-                 await fast_ban_ip(client_ip, f"Blocked UA: {user_agent}")
-                 return Response(status_code=403, content="Access denied for this User-Agent.")
+            # 3. User-Agent filtering
+            user_agent = request.headers.get("user-agent", "").lower()
+            if not user_agent:
+                return Response(status_code=403, content="Missing User-Agent header.")
+                
+            for pattern in BLOCKED_UA_PATTERNS:
+                if re.search(pattern, user_agent):
+                     await fast_ban_ip(client_ip, f"Blocked UA: {user_agent}")
+                     return Response(status_code=403, content="Access denied for this User-Agent.")
 
-        # 4. Content length limit (Prevent large payload attacks)
-        # Max 1MB for all general requests (except AI endpoints which have their own limits)
-        content_length = request.headers.get("content-length")
-        if content_length and int(content_length) > 1 * 1024 * 1024:
-            if not path.startswith("/v1/chat"): # AI endpoints handle their own limits
-                return Response(status_code=413, content="Payload too large.")
+            # 4. Content length limit
+            content_length = request.headers.get("content-length")
+            if content_length and int(content_length) > 1 * 1024 * 1024:
+                if not path.startswith("/v1/chat"):
+                    return Response(status_code=413, content="Payload too large.")
 
-        return await call_next(request)
+            return await call_next(request)
+        except Exception as e:
+            # Emergency fallback: Allow request to proceed if middleware crashes,
+            # to avoid locking the entire site with a 500 error.
+            print(f"[DDoS Middleware Error] {e}")
+            return await call_next(request)
 
 # Add the high-performance protection middleware
 app.add_middleware(AdvancedDDoSProtectionMiddleware)
