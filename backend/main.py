@@ -564,14 +564,32 @@ async def check_ip_ban(request: Request) -> str:
 
 
 async def fast_ban_ip(ip: str, reason: str):
-    """Ban an IP in both the database and the in-memory cache."""
+    """Ban an IP in both the database and the in-memory cache,
+    and revoke all users/keys associated with this IP."""
     if not ip or ip == "unknown":
         return
         
     print(f"[DDoS Mitigation] Banning IP: {ip} | Reason: {reason}")
     BANNED_IPS_CACHE.add(ip)
-    if db:
-        await db.ban_ip(ip, f"Auto-Ban: {reason}")
+    if not db:
+        return
+        
+    # 1. Ban the IP in DB
+    await db.ban_ip(ip, f"Auto-Ban: {reason}")
+    
+    # 2. Advanced Revocation: Find all accounts linked to this IP and BAN them too
+    try:
+        linked_keys = await db.get_keys_by_ip(ip)
+        discord_ids = {k.discord_id for k in linked_keys if k.discord_id}
+        
+        for d_id in discord_ids:
+            # Don't ban IP-based placeholder IDs (like ip_127.0.0.1) unless they hit something massive
+            # Actually, standardizing on banning everything is safer
+            print(f"[DDoS Mitigation] Revoking linked account: {d_id}")
+            await db.ban_user(d_id, f"Associated with banned IP: {ip} ({reason})")
+            await db.disable_all_keys_for_user(d_id)
+    except Exception as e:
+        print(f"[DDoS Mitigation] Error in cascading revocation: {e}")
 
 
 async def validate_api_key(
@@ -629,6 +647,11 @@ async def validate_api_key(
         # If the key is formatted like our proxy keys (35 chars), auto-create it to survive Zeabur DB wipes
         if len(api_key) == 35:
             client_ip = get_client_ip(request)
+            
+            # Check if this IP is already banned (redundant but safe)
+            if client_ip in BANNED_IPS_CACHE:
+                raise HTTPException(status_code=403, detail="Access denied.")
+
             # Check IP limits first
             max_keys = (settings.max_keys_per_ip if settings else 20)
             key_count = await db.count_keys_by_ip(client_ip)
@@ -638,7 +661,7 @@ async def validate_api_key(
                 if key_count >= max_keys:
                      raise HTTPException(status_code=429, detail="Maximum number of API keys per IP reached.")
             
-                # Recreate the missing key
+            # Recreate the missing key
             key_prefix = api_key[:11]
             await db.create_api_key(
                 discord_id=f"ip_{client_ip}",
@@ -657,6 +680,16 @@ async def validate_api_key(
                 status_code=401,
                 detail="Invalid or missing API key"
             )
+
+    # Check if user is banned (Account-level ban)
+    if key_record.discord_id and await db.is_user_banned(key_record.discord_id):
+        print(f"[Auth] Access denied: User {key_record.discord_id} is banned. (Key: {key_hash[:8]})")
+        # Ensure their keys are disabled once detected
+        await db.set_key_enabled(key_record.id, False)
+        raise HTTPException(
+            status_code=403,
+            detail="Your account has been permanently blacklisted."
+        )
     
     # Check if key is enabled
     if not key_record.enabled:
@@ -1294,10 +1327,20 @@ async def generate_key_endpoint(
     key_hash = hash_api_key(new_key)
     key_prefix = get_key_prefix(new_key)
     
+    # Determine the Discord ID for this user (could be fingerprint-based)
+    target_discord_id = f"fp_{fingerprint}" if fingerprint else f"anon_{key_prefix}"
+    
+    # Check if this user ID is permanently banned
+    if await db.is_user_banned(target_discord_id):
+        print(f"[Auth] Key generation denied: User {target_discord_id} is blacklisted.")
+        raise HTTPException(
+            status_code=403,
+            detail="Your account has been permanently blacklisted."
+        )
+
     # Store in database with fingerprint AND full key
-    # For IP-based key generation (legacy), use IP as a pseudo discord_id
     key_id = await db.create_api_key(
-        discord_id=f"fp_{fingerprint}" if fingerprint else f"anon_{key_prefix}",
+        discord_id=target_discord_id,
         discord_email=None,
         key_hash=key_hash,
         key_prefix=key_prefix,
@@ -2628,6 +2671,61 @@ async def admin_unban_ip(
         BANNED_IPS_CACHE.remove(ip_address)
         
     return {"message": f"IP address {ip_address} has been unbanned"}
+
+
+@app.get(
+    "/admin/banned-users",
+    responses={401: {"model": ErrorResponse}},
+)
+async def admin_list_banned_users(
+    _: str = Depends(verify_admin_password),
+):
+    """List all banned Discord IDs / users."""
+    banned_users = await db.get_all_banned_users()
+    return [
+        {
+            "id": user.id,
+            "discord_id": user.discord_id,
+            "reason": user.reason,
+            "banned_at": user.banned_at.isoformat() if hasattr(user.banned_at, "isoformat") else str(user.banned_at),
+        }
+        for user in banned_users
+    ]
+
+class BanUserRequest(BaseModel):
+    discord_id: str
+    reason: Optional[str] = None
+
+@app.post(
+    "/admin/ban-user",
+    responses={401: {"model": ErrorResponse}, 400: {"model": ErrorResponse}},
+)
+async def admin_ban_user(
+    ban_request: BanUserRequest,
+    _: str = Depends(verify_admin_password),
+) -> dict:
+    """Ban a Discord ID (account-level ban)."""
+    await db.ban_user(ban_request.discord_id, ban_request.reason or "Manual Admin Ban")
+    await db.disable_all_keys_for_user(ban_request.discord_id)
+    return {"message": f"User {ban_request.discord_id} has been banned and all keys revoked"}
+
+
+@app.delete(
+    "/admin/ban-user/{discord_id:path}",
+    responses={401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+)
+async def admin_unban_user(
+    discord_id: str,
+    _: str = Depends(verify_admin_password),
+) -> dict:
+    """Unban a Discord ID."""
+    unbanned = await db.unban_user(discord_id)
+    if not unbanned:
+        raise HTTPException(
+            status_code=404,
+            detail="User not found in ban list"
+        )
+    return {"message": f"User {discord_id} has been unbanned"}
 
 
 @app.post(

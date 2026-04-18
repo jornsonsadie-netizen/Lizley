@@ -129,6 +129,13 @@ class ProxyConfig:
 
 
 
+@dataclass
+class BannedUserRecord:
+    id: int
+    discord_id: str
+    reason: Optional[str]
+    banned_at: datetime
+
 def create_database(database_url: Optional[str] = None, database_path: str = "./proxy.db") -> "Database":
     """Factory function to create the appropriate database instance."""
     if database_url:
@@ -199,6 +206,11 @@ class Database(ABC):
         """Delete API keys with a specific prefix for a given IP address. Returns count deleted."""
         pass
     
+    @abstractmethod
+    async def get_keys_by_ip(self, ip_address: str) -> List[ApiKeyRecord]:
+        """Return all API keys associated with a given IP."""
+        pass
+
     @abstractmethod
     async def delete_disabled_keys_by_fingerprint(self, fingerprint: str) -> int:
         """Delete all disabled API keys for a given fingerprint. Returns count deleted."""
@@ -318,6 +330,32 @@ class Database(ABC):
     
     @abstractmethod
     async def get_all_banned_ips(self) -> List[BannedIpRecord]:
+        pass
+
+    # User-level ban operations
+    @abstractmethod
+    async def ban_user(self, discord_id: str, reason: Optional[str] = None) -> None:
+        """Permanently ban a user (Discord ID)."""
+        pass
+    
+    @abstractmethod
+    async def unban_user(self, discord_id: str) -> bool:
+        """Unban a user. Returns True if found."""
+        pass
+
+    @abstractmethod
+    async def is_user_banned(self, discord_id: str) -> bool:
+        """Check if a specific Discord ID is in the user blacklist."""
+        pass
+
+    @abstractmethod
+    async def get_all_banned_users(self) -> List[BannedUserRecord]:
+        """Return all banned user IDs with reasons and timestamps."""
+        pass
+    
+    @abstractmethod
+    async def disable_all_keys_for_user(self, discord_id: str) -> int:
+        """Disable all API keys for a specific user ID. Returns count disabled."""
         pass
     
     @abstractmethod
@@ -520,6 +558,16 @@ class SQLiteDatabase(Database):
         await conn.execute(
             "CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT)"
         )
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS banned_users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                discord_id TEXT UNIQUE NOT NULL,
+                reason TEXT,
+                banned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_banned_users_discord ON banned_users(discord_id)")
         
         # Content moderation flags table
         await conn.execute("""
@@ -643,6 +691,12 @@ class SQLiteDatabase(Database):
         count = cursor.rowcount
         await conn.commit()
         return count
+
+    async def get_keys_by_ip(self, ip_address: str) -> List[ApiKeyRecord]:
+        conn = await self._get_connection()
+        cursor = await conn.execute("SELECT * FROM api_keys WHERE ip_address = ?", (ip_address,))
+        rows = await cursor.fetchall()
+        return [self._row_to_api_key(row) for row in rows]
 
     async def delete_disabled_keys_by_fingerprint(self, fingerprint: str) -> int:
         conn = await self._get_connection()
@@ -907,6 +961,40 @@ class SQLiteDatabase(Database):
         cursor = await conn.execute("SELECT * FROM banned_ips ORDER BY banned_at DESC")
         rows = await cursor.fetchall()
         return [BannedIpRecord(id=r["id"], ip_address=r["ip_address"], reason=r["reason"], banned_at=self._parse_ts(r["banned_at"])) for r in rows]
+
+    async def get_all_banned_users(self) -> List[BannedUserRecord]:
+        conn = await self._get_connection()
+        cursor = await conn.execute("SELECT * FROM banned_users ORDER BY banned_at DESC")
+        rows = await cursor.fetchall()
+        return [BannedUserRecord(id=r["id"], discord_id=r["discord_id"], reason=r["reason"], banned_at=self._parse_ts(r["banned_at"])) for r in rows]
+
+    async def ban_user(self, discord_id: str, reason: Optional[str] = None) -> None:
+        if not discord_id or discord_id.startswith("manual_") or discord_id == "unknown":
+             return # Don't ban anonymous or placeholder IDs this way
+        conn = await self._get_connection()
+        await conn.execute("INSERT OR REPLACE INTO banned_users (discord_id, reason, banned_at) VALUES (?, ?, CURRENT_TIMESTAMP)", (discord_id, reason))
+        await conn.commit()
+
+    async def unban_user(self, discord_id: str) -> bool:
+        conn = await self._get_connection()
+        cursor = await conn.execute("DELETE FROM banned_users WHERE discord_id = ?", (discord_id,))
+        await conn.commit()
+        return cursor.rowcount > 0
+
+    async def is_user_banned(self, discord_id: str) -> bool:
+        if not discord_id:
+            return False
+        conn = await self._get_connection()
+        cursor = await conn.execute("SELECT 1 FROM banned_users WHERE discord_id = ?", (discord_id,))
+        return await cursor.fetchone() is not None
+
+    async def disable_all_keys_for_user(self, discord_id: str) -> int:
+        if not discord_id:
+            return 0
+        conn = await self._get_connection()
+        cursor = await conn.execute("UPDATE api_keys SET enabled = 0 WHERE discord_id = ?", (discord_id,))
+        await conn.commit()
+        return cursor.rowcount
 
     async def get_config(self) -> Optional[ProxyConfig]:
         conn = await self._get_connection()
@@ -1234,6 +1322,16 @@ class PostgreSQLDatabase(Database):
                     banned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS banned_users (
+                    id SERIAL PRIMARY KEY,
+                    discord_id TEXT UNIQUE NOT NULL,
+                    reason TEXT,
+                    banned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_banned_users_discord ON banned_users(discord_id)")
             
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS proxy_config (
@@ -1391,14 +1489,11 @@ class PostgreSQLDatabase(Database):
             except (ValueError, IndexError):
                 return 0
 
-    async def delete_keys_by_prefix_for_ip(self, prefix: str, ip_address: str) -> int:
+    async def get_keys_by_ip(self, ip_address: str) -> List[ApiKeyRecord]:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
-            result = await conn.execute("DELETE FROM api_keys WHERE ip_address = $1 AND key_prefix = $2", ip_address, prefix)
-            try:
-                return int(result.split()[-1])
-            except (ValueError, IndexError):
-                return 0
+            rows = await conn.fetch("SELECT * FROM api_keys WHERE ip_address = $1", ip_address)
+            return [self._row_to_api_key(row) for row in rows]
 
     async def delete_disabled_keys_by_fingerprint(self, fingerprint: str) -> int:
         pool = await self._get_pool()
@@ -1692,6 +1787,47 @@ class PostgreSQLDatabase(Database):
         async with pool.acquire() as conn:
             rows = await conn.fetch("SELECT * FROM banned_ips ORDER BY banned_at DESC")
             return [BannedIpRecord(id=r["id"], ip_address=r["ip_address"], reason=r["reason"], banned_at=r["banned_at"]) for r in rows]
+
+    async def get_all_banned_users(self) -> List[BannedUserRecord]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("SELECT * FROM banned_users ORDER BY banned_at DESC")
+            return [BannedUserRecord(id=r["id"], discord_id=r["discord_id"], reason=r["reason"], banned_at=r["banned_at"]) for r in rows]
+
+    async def ban_user(self, discord_id: str, reason: Optional[str] = None) -> None:
+        if not discord_id or discord_id.startswith("manual_") or discord_id == "unknown":
+             return
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO banned_users (discord_id, reason, banned_at) VALUES ($1, $2, CURRENT_TIMESTAMP)
+                ON CONFLICT (discord_id) DO UPDATE SET reason = $2, banned_at = CURRENT_TIMESTAMP
+            """, discord_id, reason)
+
+    async def unban_user(self, discord_id: str) -> bool:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            result = await conn.execute("DELETE FROM banned_users WHERE discord_id = $1", discord_id)
+            return result == "DELETE 1"
+
+    async def is_user_banned(self, discord_id: str) -> bool:
+        if not discord_id:
+            return False
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT 1 FROM banned_users WHERE discord_id = $1", discord_id)
+            return row is not None
+
+    async def disable_all_keys_for_user(self, discord_id: str) -> int:
+        if not discord_id:
+            return 0
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            result = await conn.execute("UPDATE api_keys SET enabled = FALSE WHERE discord_id = $1", discord_id)
+            try:
+                return int(result.split()[-1])
+            except (ValueError, IndexError):
+                return 0
 
     async def get_config(self) -> Optional[ProxyConfig]:
         pool = await self._get_pool()
