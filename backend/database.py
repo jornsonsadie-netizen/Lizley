@@ -1486,6 +1486,15 @@ class PostgreSQLDatabase(Database):
             except (ValueError, IndexError):
                 return 0
 
+    async def delete_keys_by_prefix_for_ip(self, prefix: str, ip_address: str) -> int:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            result = await conn.execute("DELETE FROM api_keys WHERE ip_address = $1 AND key_prefix = $2", ip_address, prefix)
+            try:
+                return int(result.split()[-1])
+            except (ValueError, IndexError):
+                return 0
+
     async def delete_keys_by_prefix_for_fingerprint(self, prefix: str, fingerprint: str) -> int:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
