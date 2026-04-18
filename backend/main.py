@@ -25,6 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from pydantic import BaseModel
+import re
 # authlib OAuth removed — Discord login is no longer used
 
 from backend.config import load_settings, Settings
@@ -279,7 +280,25 @@ RPM_LIMIT = 4
 RPD_LIMIT = 100  # Request count (display only; daily limit is request-based)
 REQUESTS_PER_DAY_LIMIT = 100  # Daily request quota per key (enforced)
 RPM_WINDOW_SECONDS = 60
+RPM_WINDOW_SECONDS = 60
 MAX_TOKENS_PER_SECOND = 100  # Maximum tokens per second for streaming (increased from 35)
+
+# ==================== DDoS Mitigation State ====================
+# Fast in-memory cache to prevent CPU-intensive DB lookups during attacks
+BANNED_IPS_CACHE: set[str] = set()
+
+# Common paths scanned by bots/attackers. Touching these = Instant Ban.
+HONEYPOT_PATHS = {
+    "/.env", "/.git", "/.git/config", "/wp-login.php", "/xmlrpc.php", 
+    "/admin.php", "/config.php", "/api/.env", "/.aws/credentials",
+    "/.vscode/sftp.json", "/composer.json", "/package.json", "/.remote-sync.json",
+    "/actuator/health", "/wp-admin", "/bin/sh", "/win/src/Config.php"
+}
+
+# User-Agents typically used by scanning tools or low-effort botnets
+BLOCKED_UA_PATTERNS = [
+    r"sqlmap", r"nikto", r"nuclei", r"nmap", r"masscan", r"zgrab"
+]
 
 
 # ==================== Helper Functions ====================
@@ -522,27 +541,37 @@ http_client: Optional[httpx.AsyncClient] = None
 async def check_ip_ban(request: Request) -> str:
     """FastAPI dependency to check if the client IP is banned.
     
-    This dependency should be applied to all endpoints that need IP ban checking.
-    It extracts the client IP and checks if it's banned in the database.
-    
-    Args:
-        request: The FastAPI request object.
-    
-    Returns:
-        The client IP address if not banned.
-    
-    Raises:
-        HTTPException: 403 Forbidden if the IP is banned.
+    This version uses the fast in-memory cache first to save CPU time.
     """
     client_ip = get_client_ip(request)
     
-    if await db.is_ip_banned(client_ip):
+    # 1. Check ultra-fast in-memory cache first
+    if client_ip in BANNED_IPS_CACHE:
         raise HTTPException(
             status_code=403,
-            detail="Your IP address has been banned"
+            detail="Forbidden: Your IP is blacklisted due to suspicious activity."
+        )
+    
+    # 2. Fallback to database if not in cache (optional, lifespan should populate cache)
+    if await db.is_ip_banned(client_ip):
+        BANNED_IPS_CACHE.add(client_ip) # Populate cache for future requests
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: Your IP is blacklisted."
         )
     
     return client_ip
+
+
+async def fast_ban_ip(ip: str, reason: str):
+    """Ban an IP in both the database and the in-memory cache."""
+    if not ip or ip == "unknown":
+        return
+        
+    print(f"[DDoS Mitigation] Banning IP: {ip} | Reason: {reason}")
+    BANNED_IPS_CACHE.add(ip)
+    if db:
+        await db.ban_ip(ip, f"Auto-Ban: {reason}")
 
 
 async def validate_api_key(
@@ -940,6 +969,15 @@ async def lifespan(app: FastAPI):
     health_check_task = asyncio.create_task(periodic_health_check())
     print("* Started periodic health check (every 10 minutes)")
     
+    # Populate the initial BANNED_IPS_CACHE from database
+    try:
+        banned_list = await db.get_all_banned_ips()
+        for b in banned_list:
+            BANNED_IPS_CACHE.add(b.ip_address)
+        print(f"* Pre-loaded {len(BANNED_IPS_CACHE)} IPs into fast-ban cache")
+    except Exception as e:
+        print(f"* Error loading ban cache: {e}")
+    
     yield
     
     # Shutdown: Cancel save task, close HTTP client, and close database
@@ -997,6 +1035,52 @@ app.add_middleware(
     expose_headers=["*"],
     max_age=3600,
 )
+
+
+# ==================== DDoS Mitigation Middlewares ====================
+
+class AdvancedDDoSProtectionMiddleware(BaseHTTPMiddleware):
+    """Extremely fast middleware to reject bad traffic before it hits CPU-heavy logic."""
+    
+    async def dispatch(self, request: Request, call_next):
+        client_ip = get_client_ip(request)
+        path = request.url.path
+        
+        # 1. Fast Cache Check (0.01ms)
+        if client_ip in BANNED_IPS_CACHE:
+            return Response(
+                status_code=403, 
+                content="Your IP is permanently banned for suspicious activity.",
+                media_type="text/plain"
+            )
+            
+        # 2. Honeypot check (Check if path is in the forbidden list)
+        if path in HONEYPOT_PATHS or any(p in path for p in [".env", ".git", "wp-login"]):
+            await fast_ban_ip(client_ip, f"Honeypot hit: {path}")
+            return Response(status_code=403, content="Suspicious request detected. Your IP has been banned.")
+
+        # 3. User-Agent filtering
+        user_agent = request.headers.get("user-agent", "").lower()
+        if not user_agent:
+            # Most bots don't bother with a UA
+            return Response(status_code=403, content="Missing User-Agent header.")
+            
+        for pattern in BLOCKED_UA_PATTERNS:
+            if re.search(pattern, user_agent):
+                 await fast_ban_ip(client_ip, f"Blocked UA: {user_agent}")
+                 return Response(status_code=403, content="Access denied for this User-Agent.")
+
+        # 4. Content length limit (Prevent large payload attacks)
+        # Max 1MB for all general requests (except AI endpoints which have their own limits)
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > 1 * 1024 * 1024:
+            if not path.startswith("/v1/chat"): # AI endpoints handle their own limits
+                return Response(status_code=413, content="Payload too large.")
+
+        return await call_next(request)
+
+# Add the high-performance protection middleware
+app.add_middleware(AdvancedDDoSProtectionMiddleware)
 
 
 # ==================== Cache Control Middleware ====================
@@ -2510,7 +2594,7 @@ async def admin_ban_ip(
             detail="Invalid IP address format"
         )
     
-    await db.ban_ip(ban_request.ip_address, ban_request.reason)
+    await fast_ban_ip(ban_request.ip_address, ban_request.reason or "Manual Admin Ban")
     return {"message": f"IP address {ban_request.ip_address} has been banned"}
 
 
@@ -2538,6 +2622,11 @@ async def admin_unban_ip(
             status_code=404,
             detail="IP address not found in ban list"
         )
+    
+    # Also remove from fast-ban cache
+    if ip_address in BANNED_IPS_CACHE:
+        BANNED_IPS_CACHE.remove(ip_address)
+        
     return {"message": f"IP address {ip_address} has been unbanned"}
 
 
