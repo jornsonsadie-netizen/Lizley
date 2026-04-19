@@ -229,3 +229,65 @@ async def maybe_curate_context(
         token_count, new_count, model_used,
     )
     return curated
+
+
+# ---------------------------------------------------------------------------
+# CSAM / underage character detector
+# ---------------------------------------------------------------------------
+
+CSAM_SYSTEM_PROMPT = (
+    "You are a content safety classifier. Your ONLY job is to detect if the user's "
+    "message contains roleplay or fictional content involving underage characters in "
+    "sexual, romantic, or otherwise inappropriate situations.\n\n"
+    "Respond with EXACTLY one word:\n"
+    "- UNSAFE  — if underage characters are involved in any sexual/romantic/inappropriate context\n"
+    "- SAFE    — if no such content is detected\n\n"
+    "Do not explain. Do not add punctuation. Output only UNSAFE or SAFE."
+)
+
+
+async def is_csam(
+    messages: list[dict[str, Any]],
+    client: Optional[httpx.AsyncClient] = None,
+) -> bool:
+    """Return True if the latest user message contains underage roleplay content.
+
+    Uses the same cheap NVIDIA models as context curation.
+    Returns False (safe) on any error so legitimate requests are never blocked by infra issues.
+    """
+    # Extract the last user message for inspection
+    last_user = ""
+    for m in reversed(messages):
+        if m.get("role") == "user":
+            content = m.get("content", "")
+            if isinstance(content, list):
+                content = " ".join(
+                    p.get("text", "") if isinstance(p, dict) else str(p)
+                    for p in content
+                )
+            last_user = str(content)
+            break
+
+    if not last_user.strip():
+        return False
+
+    check_messages = [
+        {"role": "system", "content": CSAM_SYSTEM_PROMPT},
+        {"role": "user",   "content": last_user[:4000]},  # cap to avoid wasting tokens
+    ]
+
+    own_client = client is None
+    if own_client:
+        client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0))
+
+    try:
+        result, model_used = await _call_nvidia(check_messages, client)
+        verdict = result.strip().upper().split()[0] if result.strip() else "SAFE"
+        logger.info("[CSAM] Verdict: %s (model: %s)", verdict, model_used)
+        return verdict == "UNSAFE"
+    except Exception as exc:
+        logger.error("[CSAM] Detection failed: %s — defaulting to SAFE", exc)
+        return False
+    finally:
+        if own_client:
+            await client.aclose()

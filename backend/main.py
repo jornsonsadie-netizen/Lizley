@@ -31,7 +31,7 @@ import re
 from backend.config import load_settings, Settings
 from backend.database import Database, ApiKeyRecord, create_database, ContentFlagRecord, BannedIpRecord, BannedUserRecord
 from backend.session_secret import get_or_create_session_secret
-from backend.context_curator import maybe_curate_context, _estimate_tokens as _cc_estimate_tokens
+from backend.context_curator import maybe_curate_context, is_csam, _estimate_tokens as _cc_estimate_tokens
 
 
 # ==================== Early .env Loading ====================
@@ -283,12 +283,13 @@ RPD_LIMIT = 700  # Default daily request limit
 REQUESTS_PER_DAY_LIMIT = 700  # Default daily request quota per key (enforced)
 RPM_WINDOW_SECONDS = 60
 
-# These Claude models are expensive — hard cap at 100 RPD per key, separate counter
-CLAUDE_LIMITED_MODELS = {
-    "claude-sonnet-4-5-20250929",
-    "claude-sonnet-4-6",
-}
+# Models starting with "claude" or "anthropic" are expensive — hard cap at 100 RPD per key
 CLAUDE_LIMITED_RPD = 100
+
+def _is_claude_model(model: str) -> bool:
+    """Return True if the model should use the Claude RPD limit (100/day)."""
+    m = model.lower()
+    return m.startswith("claude") or m.startswith("anthropic")
 MAX_TOKENS_PER_SECOND = 100  # Maximum tokens per second for streaming (increased from 35)
 
 # ==================== DDoS Mitigation State ====================
@@ -470,7 +471,7 @@ async def check_rate_limits(
     """
     key_record = await ensure_usage_reset(key_record, database)
     
-    is_claude = model in CLAUDE_LIMITED_MODELS
+    is_claude = _is_claude_model(model)
     effective_rpd_limit = CLAUDE_LIMITED_RPD if is_claude else REQUESTS_PER_DAY_LIMIT
     current_rpd_for_model = getattr(key_record, 'current_rpd_claude', 0) if is_claude else key_record.current_rpd
 
@@ -1627,18 +1628,9 @@ async def get_public_models():
                         result.append({
                             "id": model_id,
                             "status": status,
-                            "claude_limited": model_id in CLAUDE_LIMITED_MODELS,
+                            "claude_limited": _is_claude_model(model_id),
                         })
                         seen_ids.add(model_id)
-
-                # Always inject Claude-limited models even if upstream doesn't list them
-                for model_id in sorted(CLAUDE_LIMITED_MODELS):
-                    if model_id not in seen_ids and model_id not in excluded:
-                        result.append({
-                            "id": model_id,
-                            "status": "HEALTHY",
-                            "claude_limited": True,
-                        })
                 
                 return {"models": result}
     except Exception as e:
@@ -1719,14 +1711,39 @@ async def _proxy_chat_completions_impl(
             )
         
         # ---- Context Curation ----
-        # If the conversation exceeds 16k tokens, summarise the older portion
-        # using the cheap NVIDIA model before forwarding.
         _raw_msgs = [m.model_dump() for m in chat_request.messages]
         _curated  = await maybe_curate_context(_raw_msgs, http_client)
         if _curated is not _raw_msgs:
             token_count = _cc_estimate_tokens(_curated)
             chat_request.messages = [ChatMessage(**m) for m in _curated]
         # --------------------------
+
+        # ---- CSAM Detection ----
+        _msgs_for_check = [m.model_dump() for m in chat_request.messages]
+        if await is_csam(_msgs_for_check, http_client):
+            print(f"[CSAM] Blocked request from key {key_record.key_prefix}")
+            refusal = "I'm sorry, I can't assist you with that."
+            if chat_request.stream:
+                async def _blocked_stream():
+                    chunk = {
+                        "id": f"chatcmpl-blocked-{secrets.token_hex(6)}",
+                        "object": "chat.completion.chunk",
+                        "created": int(time.time()),
+                        "model": chat_request.model,
+                        "choices": [{"index": 0, "delta": {"content": refusal}, "finish_reason": "stop"}],
+                    }
+                    yield f"data: {json_module.dumps(chunk)}\n\n".encode()
+                    yield b"data: [DONE]\n\n"
+                return StreamingResponse(_blocked_stream(), media_type="text/event-stream")
+            return JSONResponse(content={
+                "id": f"chatcmpl-blocked-{secrets.token_hex(6)}",
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": chat_request.model,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": refusal}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            })
+        # ------------------------
         
         # Check rate limits (proactive check only)
         estimated_tokens = token_count + (await get_max_output_tokens())
@@ -1881,7 +1898,7 @@ async def _handle_emulated_streaming_request(
             model = full_data.get("model", emulated_body.get("model"))
             
             # 3. Increment RPD (separate counter for Claude models)
-            if model in CLAUDE_LIMITED_MODELS:
+            if _is_claude_model(model):
                 await db.increment_rpd_claude_only(key_record.id)
             else:
                 await db.increment_rpd_only(key_record.id)
@@ -2054,7 +2071,7 @@ async def _handle_streaming_request(
             try:
                 print(f"[Auth] Incrementing RPD for key {key_record.key_prefix}")
                 _model = request_body.get("model", "")
-                if _model in CLAUDE_LIMITED_MODELS:
+                if _is_claude_model(_model):
                     await db.increment_rpd_claude_only(key_record.id)
                 else:
                     await db.increment_rpd_only(key_record.id)
@@ -2279,7 +2296,7 @@ async def _handle_non_streaming_request(
         if response.status_code == 200:
             print(f"[Auth] Incrementing RPD for key {key_record.key_prefix}")
             _model = request_body.get("model", "")
-            if _model in CLAUDE_LIMITED_MODELS:
+            if _is_claude_model(_model):
                 await db.increment_rpd_claude_only(key_record.id)
             else:
                 await db.increment_rpd_only(key_record.id)
