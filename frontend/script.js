@@ -61,7 +61,8 @@ async function fetchPublicModels() {
         models.forEach(model => {
             const option = document.createElement('option');
             option.value = model.id;
-            option.textContent = `${model.id} - ${model.status}`;
+            const limitTag = model.claude_limited ? ' · Claude Requests' : '';
+            option.textContent = `${model.id}${limitTag} - ${model.status}`;
             
             if (model.status === 'DOWN') {
                 option.style.color = 'var(--accent-red, #ff4d4d)';

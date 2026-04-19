@@ -277,10 +277,16 @@ class RateLimitResult:
 # ==================== Constants ====================
 
 RPM_LIMIT = 4
-RPD_LIMIT = 100  # Request count (display only; daily limit is request-based)
-REQUESTS_PER_DAY_LIMIT = 100  # Daily request quota per key (enforced)
+RPD_LIMIT = 700  # Default daily request limit
+REQUESTS_PER_DAY_LIMIT = 700  # Default daily request quota per key (enforced)
 RPM_WINDOW_SECONDS = 60
-RPM_WINDOW_SECONDS = 60
+
+# These Claude models are expensive — hard cap at 100 RPD per key, separate counter
+CLAUDE_LIMITED_MODELS = {
+    "claude-sonnet-4-5-20250929",
+    "claude-sonnet-4-6",
+}
+CLAUDE_LIMITED_RPD = 100
 MAX_TOKENS_PER_SECOND = 100  # Maximum tokens per second for streaming (increased from 35)
 
 # ==================== DDoS Mitigation State ====================
@@ -396,44 +402,37 @@ def get_client_ip(request: Request) -> str:
 
 
 async def ensure_usage_reset(key_record: ApiKeyRecord, database: "Database") -> ApiKeyRecord:
-    """Check and reset RPM/RPD counters if their windows have expired.
-    
-    This ensures that usage data is accurate when viewed, even if no requests
-    have been made yet today.
-    
-    Returns:
-    (Possibly modified) ApiKeyRecord with reset counters.
-    """
+    """Check and reset RPM/RPD counters if their windows have expired."""
     now = datetime.now(timezone.utc)
     updated = False
     
     current_rpm = key_record.current_rpm
     current_rpd = key_record.current_rpd
+    current_rpd_claude = getattr(key_record, 'current_rpd_claude', 0)
     last_rpm_reset = key_record.last_rpm_reset
     last_rpd_reset = key_record.last_rpd_reset
 
-    # Fix timezone info if missing (SQLite legacy)
     if last_rpm_reset.tzinfo is None:
         last_rpm_reset = last_rpm_reset.replace(tzinfo=timezone.utc)
     if last_rpd_reset.tzinfo is None:
         last_rpd_reset = last_rpd_reset.replace(tzinfo=timezone.utc)
 
-    # Check RPM reset
     if (now - last_rpm_reset).total_seconds() >= RPM_WINDOW_SECONDS:
         await database.reset_rpm(key_record.id)
         current_rpm = 0
         last_rpm_reset = now
         updated = True
 
-    # Check RPD reset
     if now.date() > last_rpd_reset.date():
         await database.reset_rpd(key_record.id)
+        if hasattr(database, 'reset_rpd_claude'):
+            await database.reset_rpd_claude(key_record.id)
         current_rpd = 0
+        current_rpd_claude = 0
         last_rpd_reset = now
         updated = True
 
     if updated:
-        # Return a copy with new values to avoid stale reads in the same request
         return ApiKeyRecord(
             id=key_record.id,
             key_hash=key_record.key_hash,
@@ -443,9 +442,9 @@ async def ensure_usage_reset(key_record: ApiKeyRecord, database: "Database") -> 
             discord_email=key_record.discord_email,
             ip_address=key_record.ip_address,
             browser_fingerprint=key_record.browser_fingerprint,
-
             current_rpm=current_rpm,
             current_rpd=current_rpd,
+            current_rpd_claude=current_rpd_claude,
             last_rpm_reset=last_rpm_reset,
             last_rpd_reset=last_rpd_reset,
             enabled=key_record.enabled,
@@ -460,45 +459,30 @@ async def check_rate_limits(
     key_record: ApiKeyRecord,
     database: "Database",
     estimated_tokens: int = 0,
+    model: str = "",
 ) -> RateLimitResult:
     """Check rate limits for an API key.
     
-    Enforces RPM (requests per minute) and daily token quota (REQUESTS_PER_DAY_LIMIT).
-    This function performs resets if needed via ensure_usage_reset.
-    
-    Args:
-        key_record: The API key record to check.
-        database: The database instance for updating counters.
-        estimated_tokens: Estimated tokens for this request (unused currently but kept for legacy).
-    
-    Returns:
-        RateLimitResult indicating whether the request is allowed and any
-        rate limit information.
+    Claude-limited models use a separate 100 RPD counter.
+    All other models share a 700 RPD counter.
     """
-    # Ensure counters are fresh before checking
     key_record = await ensure_usage_reset(key_record, database)
     
+    is_claude = model in CLAUDE_LIMITED_MODELS
+    effective_rpd_limit = CLAUDE_LIMITED_RPD if is_claude else REQUESTS_PER_DAY_LIMIT
+    current_rpd_for_model = getattr(key_record, 'current_rpd_claude', 0) if is_claude else key_record.current_rpd
+
     now = datetime.now(timezone.utc)
     seconds_since_rpm_reset = (now - (key_record.last_rpm_reset.replace(tzinfo=timezone.utc) if key_record.last_rpm_reset.tzinfo is None else key_record.last_rpm_reset)).total_seconds()
 
-    # Check RPM limit
     if key_record.current_rpm >= RPM_LIMIT:
         retry_after = max(1, int(RPM_WINDOW_SECONDS - seconds_since_rpm_reset))
-        return RateLimitResult(
-            allowed=False,
-            rpm_exceeded=True,
-            retry_after=retry_after,
-        )
+        return RateLimitResult(allowed=False, rpm_exceeded=True, retry_after=retry_after)
     
-    # Check daily request limit
-    if key_record.current_rpd >= REQUESTS_PER_DAY_LIMIT:
+    if current_rpd_for_model >= effective_rpd_limit:
         midnight_utc = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
         retry_after = int((midnight_utc - now).total_seconds())
-        return RateLimitResult(
-            allowed=False,
-            rpd_exceeded=True,
-            retry_after=retry_after,
-        )
+        return RateLimitResult(allowed=False, rpd_exceeded=True, retry_after=retry_after)
     
     return RateLimitResult(
         allowed=True,
@@ -1636,7 +1620,11 @@ async def get_public_models():
                     if model_id and model_id not in excluded:
                         # Default to HEALTHY if it hasn't been checked yet
                         status = "HEALTHY" if MODEL_HEALTH.get(model_id, True) else "DOWN"
-                        result.append({"id": model_id, "status": status})
+                        result.append({
+                            "id": model_id,
+                            "status": status,
+                            "claude_limited": model_id in CLAUDE_LIMITED_MODELS,
+                        })
                 
                 return {"models": result}
     except Exception as e:
@@ -1728,7 +1716,7 @@ async def _proxy_chat_completions_impl(
         
         # Check rate limits (proactive check only)
         estimated_tokens = token_count + (await get_max_output_tokens())
-        rate_result = await check_rate_limits(key_record, db, estimated_tokens=estimated_tokens)
+        rate_result = await check_rate_limits(key_record, db, estimated_tokens=estimated_tokens, model=chat_request.model)
         if not rate_result.allowed:
             return create_rate_limit_response(rate_result)
         
@@ -1878,8 +1866,11 @@ async def _handle_emulated_streaming_request(
             id_str = full_data.get("id", f"chatcmpl-{secrets.token_hex(12)}")
             model = full_data.get("model", emulated_body.get("model"))
             
-            # 3. Increment RPD
-            await db.increment_rpd_only(key_record.id)
+            # 3. Increment RPD (separate counter for Claude models)
+            if model in CLAUDE_LIMITED_MODELS:
+                await db.increment_rpd_claude_only(key_record.id)
+            else:
+                await db.increment_rpd_only(key_record.id)
             
             # 4. Stream segments of content to emulate typing
             # We split by words or small chunks
@@ -2048,7 +2039,11 @@ async def _handle_streaming_request(
             # (Proactive RPM increment already happened in proxy_chat_completions)
             try:
                 print(f"[Auth] Incrementing RPD for key {key_record.key_prefix}")
-                await db.increment_rpd_only(key_record.id)
+                _model = request_body.get("model", "")
+                if _model in CLAUDE_LIMITED_MODELS:
+                    await db.increment_rpd_claude_only(key_record.id)
+                else:
+                    await db.increment_rpd_only(key_record.id)
             except Exception as db_err:
                 print(f"[DB Error] Failed to increment RPD: {db_err}. Continuing anyway.")
             
@@ -2269,7 +2264,11 @@ async def _handle_non_streaming_request(
         # Success - increment daily request count (RPD)
         if response.status_code == 200:
             print(f"[Auth] Incrementing RPD for key {key_record.key_prefix}")
-            await db.increment_rpd_only(key_record.id)
+            _model = request_body.get("model", "")
+            if _model in CLAUDE_LIMITED_MODELS:
+                await db.increment_rpd_claude_only(key_record.id)
+            else:
+                await db.increment_rpd_only(key_record.id)
         
         return JSONResponse(
             status_code=response.status_code,

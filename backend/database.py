@@ -34,7 +34,8 @@ class ApiKeyRecord:
     browser_fingerprint: Optional[str]
 
     current_rpm: int
-    current_rpd: int
+    current_rpd: int          # daily counter for non-Claude models
+    current_rpd_claude: int   # daily counter for Claude-limited models
     last_rpm_reset: datetime
     last_rpd_reset: datetime
     enabled: bool
@@ -265,6 +266,11 @@ class Database(ABC):
     async def increment_rpd_only(self, key_id: int) -> int:
         """Increment only the daily request counter (RPD). Returns the new RPD."""
         pass
+
+    @abstractmethod
+    async def increment_rpd_claude_only(self, key_id: int) -> int:
+        """Increment only the Claude daily request counter. Returns the new value."""
+        pass
     
     @abstractmethod
     async def reset_rpm(self, key_id: int) -> None:
@@ -272,6 +278,10 @@ class Database(ABC):
     
     @abstractmethod
     async def reset_rpd(self, key_id: int) -> None:
+        pass
+
+    @abstractmethod
+    async def reset_rpd_claude(self, key_id: int) -> None:
         pass
     
     @abstractmethod
@@ -495,6 +505,7 @@ class SQLiteDatabase(Database):
             ("browser_fingerprint", "ALTER TABLE api_keys ADD COLUMN browser_fingerprint TEXT"),
             ("full_key", "ALTER TABLE api_keys ADD COLUMN full_key TEXT"),
             ("bypass_ip_ban", "ALTER TABLE api_keys ADD COLUMN bypass_ip_ban BOOLEAN DEFAULT 0"),
+            ("current_rpd_claude", "ALTER TABLE api_keys ADD COLUMN current_rpd_claude INTEGER DEFAULT 0"),
 
         ]:
             try:
@@ -787,6 +798,17 @@ class SQLiteDatabase(Database):
         row = await cursor.fetchone()
         return row["current_rpd"] if row else 0
 
+    async def increment_rpd_claude_only(self, key_id: int) -> int:
+        conn = await self._get_connection()
+        await conn.execute(
+            "UPDATE api_keys SET current_rpd_claude = current_rpd_claude + 1, last_used_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (key_id,)
+        )
+        await conn.commit()
+        cursor = await conn.execute("SELECT current_rpd_claude FROM api_keys WHERE id = ?", (key_id,))
+        row = await cursor.fetchone()
+        return row["current_rpd_claude"] if row else 0
+
     async def reset_rpm(self, key_id: int) -> None:
         conn = await self._get_connection()
         await conn.execute("UPDATE api_keys SET current_rpm = 0, last_rpm_reset = CURRENT_TIMESTAMP WHERE id = ?", (key_id,))
@@ -797,9 +819,14 @@ class SQLiteDatabase(Database):
         await conn.execute("UPDATE api_keys SET current_rpd = 0, last_rpd_reset = CURRENT_TIMESTAMP WHERE id = ?", (key_id,))
         await conn.commit()
 
+    async def reset_rpd_claude(self, key_id: int) -> None:
+        conn = await self._get_connection()
+        await conn.execute("UPDATE api_keys SET current_rpd_claude = 0, last_rpd_reset = CURRENT_TIMESTAMP WHERE id = ?", (key_id,))
+        await conn.commit()
+
     async def reset_all_rpd(self) -> int:
         conn = await self._get_connection()
-        cursor = await conn.execute("UPDATE api_keys SET current_rpd = 0, last_rpd_reset = CURRENT_TIMESTAMP")
+        cursor = await conn.execute("UPDATE api_keys SET current_rpd = 0, current_rpd_claude = 0, last_rpd_reset = CURRENT_TIMESTAMP")
         await conn.commit()
         return cursor.rowcount
 
@@ -1107,6 +1134,7 @@ class SQLiteDatabase(Database):
             browser_fingerprint=row["browser_fingerprint"] if "browser_fingerprint" in row.keys() else None,
 
             current_rpm=row["current_rpm"], current_rpd=row["current_rpd"],
+            current_rpd_claude=row["current_rpd_claude"] if "current_rpd_claude" in row.keys() else 0,
             last_rpm_reset=self._parse_ts(row["last_rpm_reset"]), last_rpd_reset=self._parse_ts(row["last_rpd_reset"]),
             enabled=bool(row["enabled"]),
             bypass_ip_ban=bool(row["bypass_ip_ban"]) if "bypass_ip_ban" in row.keys() else False,
@@ -1293,6 +1321,8 @@ class PostgreSQLDatabase(Database):
                 await conn.execute("ALTER TABLE api_keys ADD COLUMN discord_email TEXT")
             if 'bypass_ip_ban' not in existing_col_names:
                 await conn.execute("ALTER TABLE api_keys ADD COLUMN bypass_ip_ban BOOLEAN DEFAULT FALSE")
+            if 'current_rpd_claude' not in existing_col_names:
+                await conn.execute("ALTER TABLE api_keys ADD COLUMN current_rpd_claude INTEGER DEFAULT 0")
 
             
             # Create indexes (safe to run multiple times)
@@ -1590,6 +1620,15 @@ class PostgreSQLDatabase(Database):
             )
             return row["current_rpd"] if row else 0
 
+    async def increment_rpd_claude_only(self, key_id: int) -> int:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "UPDATE api_keys SET current_rpd_claude = current_rpd_claude + 1, last_used_at = CURRENT_TIMESTAMP WHERE id = $1 RETURNING current_rpd_claude",
+                key_id
+            )
+            return row["current_rpd_claude"] if row else 0
+
     async def reset_rpm(self, key_id: int) -> None:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
@@ -1600,10 +1639,15 @@ class PostgreSQLDatabase(Database):
         async with pool.acquire() as conn:
             await conn.execute("UPDATE api_keys SET current_rpd = 0, last_rpd_reset = CURRENT_TIMESTAMP WHERE id = $1", key_id)
 
+    async def reset_rpd_claude(self, key_id: int) -> None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute("UPDATE api_keys SET current_rpd_claude = 0, last_rpd_reset = CURRENT_TIMESTAMP WHERE id = $1", key_id)
+
     async def reset_all_rpd(self) -> int:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
-            result = await conn.execute("UPDATE api_keys SET current_rpd = 0, last_rpd_reset = CURRENT_TIMESTAMP")
+            result = await conn.execute("UPDATE api_keys SET current_rpd = 0, current_rpd_claude = 0, last_rpd_reset = CURRENT_TIMESTAMP")
             return int(result.split()[-1]) if result else 0
 
     async def reset_all_rpm(self) -> int:
@@ -1943,6 +1987,7 @@ class PostgreSQLDatabase(Database):
             browser_fingerprint=self._safe_get(row, "browser_fingerprint"),
 
             current_rpm=row["current_rpm"], current_rpd=row["current_rpd"],
+            current_rpd_claude=self._safe_get(row, "current_rpd_claude", 0),
             last_rpm_reset=row["last_rpm_reset"], last_rpd_reset=row["last_rpd_reset"],
             enabled=row["enabled"],
             bypass_ip_ban=self._safe_get(row, "bypass_ip_ban", False),
