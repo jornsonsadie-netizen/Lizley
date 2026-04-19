@@ -31,6 +31,11 @@ const rpdProgress = document.getElementById('rpd-progress');
 const rpdUsed = document.getElementById('rpd-used');
 const rpdLimit = document.getElementById('rpd-limit');
 
+// Claude RPD elements
+const claudeRpdProgress = document.getElementById('claude-rpd-progress');
+const claudeRpdUsed = document.getElementById('claude-rpd-used');
+const claudeRpdLimit = document.getElementById('claude-rpd-limit');
+
 // Total tokens
 const totalTokens = document.getElementById('total-tokens');
 
@@ -315,12 +320,20 @@ function updateUsageDisplay(data) {
     rpmUsed.textContent = rpm;
     rpmLimit.textContent = rpmLimitVal;
     
-    // Update requests per day (current_rpd = requests used today)
+    // Update requests per day
     const rpd = data.rpd_used ?? 0;
     const rpdPercent = rpdLimitVal > 0 ? (rpd / rpdLimitVal) * 100 : 0;
     if (rpdProgress) rpdProgress.style.width = `${Math.min(rpdPercent, 100)}%`;
     if (rpdUsed) rpdUsed.textContent = typeof rpd === 'number' ? rpd.toLocaleString() : String(rpd);
     if (rpdLimit) rpdLimit.textContent = typeof rpdLimitVal === 'number' ? rpdLimitVal.toLocaleString() : rpdLimitVal;
+
+    // Update Claude requests
+    const claudeUsed = data.rpd_claude_used ?? 0;
+    const claudeLimit = data.rpd_claude_limit ?? 100;
+    const claudePercent = claudeLimit > 0 ? (claudeUsed / claudeLimit) * 100 : 0;
+    if (claudeRpdProgress) claudeRpdProgress.style.width = `${Math.min(claudePercent, 100)}%`;
+    if (claudeRpdUsed) claudeRpdUsed.textContent = claudeUsed;
+    if (claudeRpdLimit) claudeRpdLimit.textContent = claudeLimit;
     
     // Total tokens used (all time)
     if (totalTokens) {

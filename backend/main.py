@@ -191,6 +191,8 @@ class UsageResponse(BaseModel):
     rpd_used: int
     rpd_limit: int
     rpd_remaining: int
+    rpd_claude_used: int = 0
+    rpd_claude_limit: int = 100
     total_tokens: int
 
 
@@ -1505,6 +1507,8 @@ async def get_my_usage(
         rpd_used=current_rpd,
         rpd_limit=REQUESTS_PER_DAY_LIMIT,
         rpd_remaining=max(0, REQUESTS_PER_DAY_LIMIT - current_rpd),
+        rpd_claude_used=getattr(key_record, 'current_rpd_claude', 0),
+        rpd_claude_limit=CLAUDE_LIMITED_RPD,
         total_tokens=usage_stats.total_tokens,
     )
 

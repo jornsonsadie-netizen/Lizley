@@ -738,6 +738,32 @@ h3 {
     margin-bottom: var(--space-md);
 }
 
+.usage-card-full {
+    margin-bottom: var(--space-md);
+}
+
+.progress-bar-claude {
+    background: linear-gradient(
+        90deg,
+        rgba(220, 180, 200, 0.9) 0%,
+        rgba(200, 160, 185, 0.85) 25%,
+        rgba(210, 170, 195, 0.8) 50%,
+        rgba(225, 190, 210, 0.75) 75%,
+        rgba(240, 210, 225, 0.7) 100%
+    );
+}
+
+[data-theme="dark"] .progress-bar-claude {
+    background: linear-gradient(
+        90deg,
+        rgba(160, 110, 140, 0.9) 0%,
+        rgba(140, 95, 125, 0.85) 25%,
+        rgba(150, 105, 135, 0.8) 50%,
+        rgba(165, 120, 150, 0.75) 75%,
+        rgba(180, 140, 165, 0.7) 100%
+    );
+}
+
 .usage-card {
     background: var(--glass);
     backdrop-filter: blur(15px);
