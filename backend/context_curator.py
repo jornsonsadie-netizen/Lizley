@@ -37,7 +37,9 @@ CHEAP_MODELS: list[str] = [
 ]
 
 # Token thresholds (rough 4-chars-per-token heuristic)
-TRIGGER_TOKENS   = 10_000   # summarise when input exceeds this
+# NOTE: Claude's tokenizer is more efficient than 4 chars/token for code/JSON,
+# so real token counts can be 2-3x our estimate. We trigger conservatively.
+TRIGGER_TOKENS   = 5_000    # ~10k real tokens after accounting for heuristic underestimate
 TARGET_TOKENS    = 6_000    # aim for this after summarisation
 PROTECTED_TURNS  = 1        # never summarise the last N user/assistant turns (1 turn = last 2 messages)
 
