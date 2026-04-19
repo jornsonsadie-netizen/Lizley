@@ -1614,16 +1614,26 @@ async def get_public_models():
                 
                 excluded = await db.get_excluded_models()
                 result = []
+                seen_ids = set()
                 # Sort alphabetically
                 for m in sorted(available_models, key=lambda x: x.get("id", "")):
                     model_id = m.get("id")
                     if model_id and model_id not in excluded:
-                        # Default to HEALTHY if it hasn't been checked yet
                         status = "HEALTHY" if MODEL_HEALTH.get(model_id, True) else "DOWN"
                         result.append({
                             "id": model_id,
                             "status": status,
                             "claude_limited": model_id in CLAUDE_LIMITED_MODELS,
+                        })
+                        seen_ids.add(model_id)
+
+                # Always inject Claude-limited models even if upstream doesn't list them
+                for model_id in sorted(CLAUDE_LIMITED_MODELS):
+                    if model_id not in seen_ids and model_id not in excluded:
+                        result.append({
+                            "id": model_id,
+                            "status": "HEALTHY",
+                            "claude_limited": True,
                         })
                 
                 return {"models": result}
