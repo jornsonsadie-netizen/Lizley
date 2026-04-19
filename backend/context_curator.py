@@ -37,9 +37,9 @@ CHEAP_MODELS: list[str] = [
 ]
 
 # Token thresholds (rough 4-chars-per-token heuristic)
-TRIGGER_TOKENS   = 16_000   # summarise when input exceeds this
-TARGET_TOKENS    = 8_000    # aim for this after summarisation
-PROTECTED_TURNS  = 3        # never summarise the last N user/assistant turns
+TRIGGER_TOKENS   = 10_000   # summarise when input exceeds this
+TARGET_TOKENS    = 6_000    # aim for this after summarisation
+PROTECTED_TURNS  = 1        # never summarise the last N user/assistant turns (1 turn = last 2 messages)
 
 # System prompt injected into every summarisation call
 SUMMARISER_SYSTEM_PROMPT = (
@@ -100,7 +100,7 @@ async def _call_nvidia(
                 json={
                     "model": model,
                     "messages": messages,
-                    "max_tokens": TARGET_TOKENS * 4,  # generous char budget
+                    "max_tokens": 4096,
                     "temperature": 0.3,
                     "stream": False,
                 },
