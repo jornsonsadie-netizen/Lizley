@@ -539,6 +539,7 @@ async def check_ip_ban(request: Request) -> str:
     
     # 1. Check ultra-fast in-memory cache first
     if client_ip in BANNED_IPS_CACHE:
+        print(f"[TRACE-403-CACHE-BAN] IP: {client_ip}")
         raise HTTPException(
             status_code=403,
             detail="Forbidden: Your IP is blacklisted due to suspicious activity."
@@ -547,6 +548,7 @@ async def check_ip_ban(request: Request) -> str:
     # 2. Fallback to database if not in cache (optional, lifespan should populate cache)
     if await db.is_ip_banned(client_ip):
         BANNED_IPS_CACHE.add(client_ip) # Populate cache for future requests
+        print(f"[TRACE-403-DB-BAN] IP: {client_ip}")
         raise HTTPException(
             status_code=403,
             detail="Forbidden: Your IP is blacklisted."
@@ -673,6 +675,7 @@ async def validate_api_key(
             
             # Check if this IP is already banned (redundant but safe)
             if client_ip in BANNED_IPS_CACHE:
+                print(f"[TRACE-403-RESTORE-BAN] IP: {client_ip}")
                 raise HTTPException(status_code=403, detail="Access denied.")
 
             # Check IP limits first
@@ -706,7 +709,7 @@ async def validate_api_key(
 
     # Check if user is banned (Account-level ban)
     if key_record.discord_id and await db.is_user_banned(key_record.discord_id):
-        print(f"[Auth] Access denied: User {key_record.discord_id} is banned. (Key: {key_hash[:8]})")
+        print(f"[TRACE-403-USER-BAN] User: {key_record.discord_id} | IP: {client_ip}")
         # Ensure their keys are disabled once detected
         await db.set_key_enabled(key_record.id, False)
         raise HTTPException(
@@ -716,7 +719,7 @@ async def validate_api_key(
     
     # Check if key is enabled
     if not key_record.enabled:
-        print(f"[Auth] Access denied: Key {key_hash[:8]} is disabled.")
+        print(f"[TRACE-403-KEY-DISABLED] Key: {key_record.key_prefix} | IP: {client_ip}")
         raise HTTPException(
             status_code=403,
             detail="This API key has been disabled"
@@ -728,7 +731,7 @@ async def validate_api_key(
     
     # 1. IP Lock Check: Each key is for only one IP
     if not key_record.bypass_ip_ban and key_record.ip_address != client_ip:
-        print(f"[Auth] IP Lock Violation: Key {key_record.key_prefix} (Owner {key_record.discord_id}) accessed from {client_ip} (Original: {key_record.ip_address})")
+        print(f"[TRACE-403-IP-MISMATCH] Key: {key_record.key_prefix} | Current: {client_ip} | Original: {key_record.ip_address}")
         raise HTTPException(
             status_code=403,
             detail="IP address mismatch detected. Please refresh the page to update your session or use your original network."
@@ -739,7 +742,7 @@ async def validate_api_key(
 
     # Check if IP is banned (fallback database check)
     if not key_record.bypass_ip_ban and await db.is_ip_banned(client_ip):
-        print(f"[Auth] Access denied: IP {client_ip} is banned. (Key: {key_hash[:8]})")
+        print(f"[TRACE-403-IP-BAN-FALLBACK] IP: {client_ip}")
         raise HTTPException(
             status_code=403,
             detail="Your IP address has been banned"
@@ -1432,6 +1435,7 @@ async def generate_key_endpoint(
         if cleaned > 0:
             key_count = await db.count_keys_by_ip(client_ip)
         if key_count >= max_keys:
+            print(f"[TRACE-403-MAX-KEYS] IP: {client_ip} | Count: {key_count}")
             raise HTTPException(
                 status_code=403,
                 detail=f"Maximum number of API keys per IP ({max_keys}) reached. Use an existing key or contact support."
