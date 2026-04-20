@@ -871,28 +871,15 @@ async def get_all_providers() -> List[Dict[str, str]]:
     if settings:
         return [{"url": normalize_target_api_url(settings.target_api_url), "key": settings.target_api_key}]
     return []
-    """Get the target API URL and key from config or database.
-    
-    With multiple providers configured, picks one randomly to distribute load.
-    """
-    config = await db.get_config()
-    if config:
-        providers = _decode_providers(
-            normalize_target_api_url(config.target_api_url),
-            config.target_api_key,
-            config.fallback_api_keys,
-        )
-        # Filter to providers that have both a URL and key
-        active = [p for p in providers if p.get("url") and p.get("key")]
-        if active:
-            import random
-            p = random.choice(active)
-            return normalize_target_api_url(p["url"]), p["key"]
-        return normalize_target_api_url(config.target_api_url), config.target_api_key
 
-    if settings:
-        return normalize_target_api_url(settings.target_api_url), settings.target_api_key
 
+async def get_target_api_config() -> Tuple[str, str]:
+    """Get the target API URL and key — picks randomly across all active providers."""
+    providers = await get_all_providers()
+    if providers:
+        import random
+        p = random.choice(providers)
+        return p["url"], p["key"]
     raise HTTPException(status_code=500, detail="Proxy not configured")
 
 
