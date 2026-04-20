@@ -858,7 +858,19 @@ def _decode_providers(target_url: str, target_key: str, fallback_api_keys: str) 
     return providers
 
 
-async def get_target_api_config() -> Tuple[str, str]:
+async def get_all_providers() -> List[Dict[str, str]]:
+    """Return all configured providers as [{url, key}]."""
+    config = await db.get_config()
+    if config:
+        providers = _decode_providers(
+            normalize_target_api_url(config.target_api_url),
+            config.target_api_key,
+            config.fallback_api_keys,
+        )
+        return [p for p in providers if p.get("url") and p.get("key")]
+    if settings:
+        return [{"url": normalize_target_api_url(settings.target_api_url), "key": settings.target_api_key}]
+    return []
     """Get the target API URL and key from config or database.
     
     With multiple providers configured, picks one randomly to distribute load.
@@ -1549,74 +1561,45 @@ async def get_my_usage(
 async def _proxy_models_impl(
     key_data: Tuple[ApiKeyRecord, str],
 ) -> JSONResponse:
-    """Shared implementation for GET /v1/models and /v1/models/ (avoids 301 redirect)."""
+    """Fetch models from ALL configured providers and merge the lists."""
     key_record, client_ip = key_data
     
-    # NOTE: /v1/models does NOT count against rate limits
-    # It's just listing available models, not making actual API calls
+    providers = await get_all_providers()
+    if not providers:
+        return JSONResponse(status_code=500, content={"error": {"message": "No providers configured"}})
     
-    # Get target API config
-    target_url, target_key = await get_target_api_config()
+    all_models = {}
+    excluded = await db.get_excluded_models()
     
-    # Forward request to target API using global client
-    try:
-        response = await http_client.get(
-            f"{target_url}/models",
-            headers={"Authorization": f"Bearer {target_key}"},
-        )
-        
-        # Log usage (0 tokens for models endpoint, doesn't affect rate limits)
-        await db.log_usage(
-            key_id=key_record.id,
-            model="models",
-            tokens=0,
-            success=response.status_code == 200,
-            ip_address=client_ip,
-        )
-        
+    for provider in providers:
         try:
-            content = response.json()
-            
-            # Filter models based on exclusion list
-            if response.status_code == 200 and "data" in content:
-                excluded = await db.get_excluded_models()
-                if excluded:
-                    content["data"] = [
-                        m for m in content["data"] 
-                        if m.get("id") not in excluded
-                    ]
-        except Exception:
-            content = {"error": {"message": "Upstream returned invalid JSON"}}
-        return JSONResponse(
-            status_code=response.status_code,
-            content=content,
-        )
-    except httpx.TimeoutException:
-        await db.log_usage(
-            key_id=key_record.id,
-            model="models",
-            tokens=0,
-            success=False,
-            ip_address=client_ip,
-            error_message="Upstream API timeout",
-        )
-        raise HTTPException(
-            status_code=502,
-            detail="Unable to reach upstream API"
-        )
-    except httpx.RequestError as e:
-        await db.log_usage(
-            key_id=key_record.id,
-            model="models",
-            tokens=0,
-            success=False,
-            ip_address=client_ip,
-            error_message=str(e),
-        )
-        raise HTTPException(
-            status_code=502,
-            detail="Unable to reach upstream API"
-        )
+            response = await http_client.get(
+                f"{provider['url']}/models",
+                headers={"Authorization": f"Bearer {provider['key']}"},
+                timeout=10.0,
+            )
+            if response.status_code == 200:
+                content = response.json()
+                for m in content.get("data", []):
+                    model_id = m.get("id")
+                    if model_id and model_id not in excluded and model_id not in all_models:
+                        all_models[model_id] = m
+        except Exception as e:
+            print(f"[Models] Error fetching from {provider['url']}: {e}")
+            continue
+    
+    await db.log_usage(
+        key_id=key_record.id,
+        model="models",
+        tokens=0,
+        success=len(all_models) > 0,
+        ip_address=client_ip,
+    )
+    
+    return JSONResponse(
+        status_code=200,
+        content={"object": "list", "data": list(all_models.values())},
+    )
 
 
 @app.get("/v1/models", response_class=JSONResponse)
@@ -1630,43 +1613,41 @@ async def proxy_models(
 
 @app.get("/api/public-models", response_class=JSONResponse)
 async def get_public_models():
-    """Unauthenticated endpoint to get enabled models and their health status."""
-    try:
-        target_url, target_key = await get_target_api_config()
-    except Exception:
+    """Unauthenticated endpoint to get enabled models from ALL providers."""
+    providers = await get_all_providers()
+    if not providers:
         return {"models": []}
-        
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                f"{target_url}/models", 
-                headers={"Authorization": f"Bearer {target_key}", "Cache-Control": "no-cache"}, 
-                timeout=10.0
-            )
-            if resp.status_code == 200:
-                content = resp.json()
-                available_models = content.get("data", [])
-                
-                excluded = await db.get_excluded_models()
-                result = []
-                seen_ids = set()
-                # Sort alphabetically
-                for m in sorted(available_models, key=lambda x: x.get("id", "")):
-                    model_id = m.get("id")
-                    if model_id and model_id not in excluded:
-                        status = "HEALTHY" if MODEL_HEALTH.get(model_id, True) else "DOWN"
-                        result.append({
-                            "id": model_id,
-                            "status": status,
-                            "claude_limited": _is_claude_model(model_id),
-                        })
-                        seen_ids.add(model_id)
-                
-                return {"models": result}
-    except Exception as e:
-        print(f"[Public Models] Error fetching models: {e}")
-        
-    return {"models": []}
+
+    excluded = await db.get_excluded_models()
+    all_model_ids: dict = {}
+
+    async with httpx.AsyncClient() as client:
+        for provider in providers:
+            try:
+                resp = await client.get(
+                    f"{provider['url']}/models",
+                    headers={"Authorization": f"Bearer {provider['key']}", "Cache-Control": "no-cache"},
+                    timeout=10.0,
+                )
+                if resp.status_code == 200:
+                    for m in resp.json().get("data", []):
+                        model_id = m.get("id")
+                        if model_id and model_id not in excluded and model_id not in all_model_ids:
+                            all_model_ids[model_id] = True
+            except Exception as e:
+                print(f"[Public Models] Error fetching from {provider['url']}: {e}")
+                continue
+
+    result = []
+    for model_id in sorted(all_model_ids.keys()):
+        status = "HEALTHY" if MODEL_HEALTH.get(model_id, True) else "DOWN"
+        result.append({
+            "id": model_id,
+            "status": status,
+            "claude_limited": _is_claude_model(model_id),
+        })
+
+    return {"models": result}
 
 
 
