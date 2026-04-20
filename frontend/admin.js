@@ -31,11 +31,8 @@ const consoleLog = document.getElementById('console-log');
 
 // Config form elements
 const configForm = document.getElementById('config-form');
-const targetUrlInput = document.getElementById('target-url');
-const targetKeyInput = document.getElementById('target-key');
 const maxContextInput = document.getElementById('max-context');
 const maxOutputTokensInput = document.getElementById('max-output-tokens');
-const fallbackKeysInput = document.getElementById('fallback-keys');
 
 // Keys table elements
 const keysTable = document.getElementById('keys-table');
@@ -294,18 +291,69 @@ async function adminFetch(url, options = {}) {
 // Configuration Management
 // ===================================
 
+function renderProviders(providers) {
+    const list = document.getElementById('providers-list');
+    if (!list) return;
+    list.innerHTML = '';
+    providers.forEach((p, i) => {
+        const isPrimary = i === 0;
+        const row = document.createElement('div');
+        row.className = 'provider-row';
+        row.dataset.index = i;
+        row.innerHTML = `
+            <span class="provider-badge ${isPrimary ? 'primary' : 'fallback'}">${isPrimary ? 'Primary' : `#${i + 1}`}</span>
+            <div class="provider-url-input">
+                <input type="url" placeholder="https://api.example.com/v1" value="${escapeHtml(p.url || '')}" data-field="url" ${isPrimary ? 'required' : ''}>
+            </div>
+            <div class="provider-key-input">
+                <input type="password" placeholder="${p.keyMasked || 'API Key'}" value="${escapeHtml(p.key || '')}" data-field="key">
+            </div>
+            ${!isPrimary ? `<button type="button" class="btn btn-danger btn-sm provider-delete-btn" onclick="removeProvider(${i})" title="Remove provider">✕</button>` : '<span style="width:2rem;flex-shrink:0"></span>'}
+        `;
+        list.appendChild(row);
+    });
+}
+
+function getProvidersFromDOM() {
+    const rows = document.querySelectorAll('.provider-row');
+    return Array.from(rows).map(row => ({
+        url: row.querySelector('[data-field="url"]').value.trim(),
+        key: row.querySelector('[data-field="key"]').value.trim(),
+    }));
+}
+
+let _providers = [{ url: '', key: '', keyMasked: 'sk-...' }];
+
+function addProvider() {
+    _providers = getProvidersFromDOM().map((p, i) => ({ ...p, keyMasked: _providers[i]?.keyMasked || 'sk-...' }));
+    _providers.push({ url: '', key: '', keyMasked: 'sk-...' });
+    renderProviders(_providers);
+}
+
+function removeProvider(index) {
+    _providers = getProvidersFromDOM().map((p, i) => ({ ...p, keyMasked: _providers[i]?.keyMasked || 'sk-...' }));
+    if (_providers.length <= 1) return;
+    _providers.splice(index, 1);
+    renderProviders(_providers);
+}
+
 async function loadConfig() {
     try {
         const response = await adminFetch('/admin/config');
 
         if (response.ok) {
             const data = await response.json();
-            targetUrlInput.value = data.target_api_url || '';
-            targetKeyInput.value = '';
-            targetKeyInput.placeholder = data.target_api_key_masked || 'sk-...';
+
+            // Build provider list from primary + fallback keys
+            const fallbackKeys = (data.fallback_api_keys || '').split('\n').map(k => k.trim()).filter(Boolean);
+            _providers = [
+                { url: data.target_api_url || '', key: '', keyMasked: data.target_api_key_masked || 'sk-...' },
+                ...fallbackKeys.map(k => ({ url: data.target_api_url || '', key: '', keyMasked: k.substring(0, 8) + '...' }))
+            ];
+            renderProviders(_providers);
+
             maxContextInput.value = data.max_context || 128000;
             if (maxOutputTokensInput) maxOutputTokensInput.value = data.max_output_tokens ?? 4096;
-            if (fallbackKeysInput) fallbackKeysInput.value = data.fallback_api_keys || '';
             const maxKeysEl = document.getElementById('max-keys-per-ip');
             if (maxKeysEl) maxKeysEl.textContent = data.max_keys_per_ip ?? '—';
         } else if (response.status === 401) {
@@ -321,21 +369,26 @@ async function loadConfig() {
 async function saveConfig(event) {
     event.preventDefault();
 
-    const targetUrl = targetUrlInput.value;
-    const targetKey = targetKeyInput.value;
+    const providers = getProvidersFromDOM();
+    const primary = providers[0];
+    const fallbacks = providers.slice(1);
+
+    if (!primary.url) {
+        showAdminStatus('Primary provider URL is required', 'error');
+        return;
+    }
+
     const maxContext = parseInt(maxContextInput.value, 10);
     const maxOutputTokens = maxOutputTokensInput ? parseInt(maxOutputTokensInput.value, 10) : 4096;
 
     const payload = {
-        target_api_url: targetUrl,
+        target_api_url: primary.url,
         max_context: maxContext,
         max_output_tokens: Math.max(1, Math.min(128000, maxOutputTokens)),
-        fallback_api_keys: fallbackKeysInput ? fallbackKeysInput.value.trim() : ""
+        fallback_api_keys: fallbacks.map(p => p.key).filter(Boolean).join('\n'),
     };
 
-    if (targetKey) {
-        payload.target_api_key = targetKey;
-    }
+    if (primary.key) payload.target_api_key = primary.key;
 
     try {
         const response = await adminFetch('/admin/config', {
@@ -347,7 +400,6 @@ async function saveConfig(event) {
         if (response.ok) {
             logToConsole('Configuration saved', 'success');
             showAdminStatus('Configuration saved successfully', 'success');
-            targetKeyInput.value = '';
             await loadConfig();
         } else if (response.status === 401) {
             logout();

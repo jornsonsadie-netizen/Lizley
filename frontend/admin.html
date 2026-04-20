@@ -168,29 +168,15 @@
             </div>
 
             <form id="config-form" onsubmit="saveConfig(event)">
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="target-url">Target API URL</label>
-                        <input type="url" id="target-url" name="target_api_url" placeholder="https://api.openai.com/v1"
-                            required>
-                        <small class="form-hint">The upstream API endpoint to proxy requests to</small>
-                    </div>
-                </div>
 
+                <!-- Providers -->
                 <div class="form-row">
-                    <div class="form-group">
-                        <label for="target-key">Target API Key</label>
-                        <input type="password" id="target-key" name="target_api_key" placeholder="sk-...">
-                        <small class="form-hint">Your primary API key for the target service (stored securely)</small>
-                    </div>
-                </div>
-
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="fallback-keys">Fallback API Keys</label>
-                        <textarea id="fallback-keys" name="fallback_api_keys" rows="4" placeholder="sk-key1&#10;sk-key2"></textarea>
-                        <small class="form-hint">Additional API keys to use if the primary key fails (one per line)</small>
-                    </div>
+                    <label class="providers-label">API Providers</label>
+                    <small class="form-hint" style="display:block;margin-bottom:0.6rem;">First provider is primary. Others are fallbacks used if the primary fails.</small>
+                    <div id="providers-list"></div>
+                    <button type="button" onclick="addProvider()" class="btn btn-ghost btn-sm providers-add-btn">
+                        <span>＋</span> Add Provider
+                    </button>
                 </div>
 
                 <div class="form-row">
@@ -207,8 +193,7 @@
                         <label for="max-output-tokens">Max Output Tokens</label>
                         <input type="number" id="max-output-tokens" name="max_output_tokens" min="1" max="128000"
                             value="4096" required>
-                        <small class="form-hint">Maximum completion tokens per response (stops long outputs draining
-                            quota, default: 4,096)</small>
+                        <small class="form-hint">Maximum completion tokens per response (default: 4,096)</small>
                     </div>
                 </div>
 
