@@ -734,13 +734,8 @@ async def validate_api_key(
             detail="IP address mismatch detected. Please refresh the page to update your session or use your original network."
         )
         
-    # 2. Proactive VPN Check (for the current IP, even if it matches or is newly assigned)
-    if not key_record.bypass_ip_ban and await is_vpn_or_proxy(client_ip):
-        print(f"[Auth] VPN Detected: {client_ip} is flagged as proxy/hosting.")
-        raise HTTPException(
-            status_code=403,
-            detail="Why are you using a VPN? Turn it off."
-        )
+    
+
 
     # Check if IP is banned (fallback database check)
     if not key_record.bypass_ip_ban and await db.is_ip_banned(client_ip):
@@ -1330,9 +1325,7 @@ async def restore_api_key(
     """Restore an API key that was lost due to an ephemeral database wipe on Zeabur."""
     client_ip = get_client_ip(request)
     
-    # [STRICT VPN BLOCK] Check for VPN/Proxy on current IP
-    if await is_vpn_or_proxy(client_ip):
-         raise HTTPException(status_code=403, detail="Why are you using a VPN? Turn it off.")
+
 
     # Basic validation
     if not data.full_key.startswith("sk-") or len(data.full_key) != 35:
@@ -1404,9 +1397,7 @@ async def generate_key_endpoint(
     """
     fingerprint = gen_request.fingerprint
     
-    # [STRICT VPN BLOCK] Check for VPN/Proxy on current IP
-    if await is_vpn_or_proxy(client_ip):
-         raise HTTPException(status_code=403, detail="Why are you using a VPN? Turn it off.")
+
 
     # Proactively purge any disabled keys for this fingerprint/IP
     # This ensures that "Your API key is disabled" errors are resolved by deletion
