@@ -3155,46 +3155,56 @@ async def serve_admin():
 async def admin_get_models(
     admin_authed: str = Depends(verify_admin_password),
 ):
-    """Get all models with their current enabled/disabled status."""
-    target_url, target_key = await get_target_api_config()
-    
+    """Get all models from ALL providers with their current enabled/disabled status."""
+    providers = await get_all_providers()
+    if not providers:
+        raise HTTPException(status_code=502, detail="No providers configured")
+
+    all_models: Dict[str, dict] = {}
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{target_url}/models",
-                headers={"Authorization": f"Bearer {target_key}"},
-                timeout=10.0
-            )
-            response.raise_for_status()
-            upstream_models = response.json().get("data", [])
-            
+            for provider in providers:
+                try:
+                    response = await client.get(
+                        f"{provider['url']}/models",
+                        headers={"Authorization": f"Bearer {provider['key']}"},
+                        timeout=10.0
+                    )
+                    if response.status_code == 200:
+                        for m in response.json().get("data", []):
+                            mid = m.get("id")
+                            if mid and mid not in all_models:
+                                all_models[mid] = m
+                except Exception as e:
+                    print(f"[AdminModels] Error fetching from {provider['url']}: {e}")
+                    continue
+
         excluded = await db.get_excluded_models()
         aliases = await db.get_model_aliases()
-        
+
         models_info = []
-        for m in upstream_models:
-            model_id = m["id"]
+        for model_id, m in all_models.items():
             models_info.append(AdminModelInfo(
                 id=model_id,
-                name=m.get("id", "Unknown"),
+                name=model_id,
                 enabled=model_id not in excluded,
                 created=m.get("created", 0),
                 owned_by=m.get("owned_by", "system"),
                 alias=aliases.get(model_id)
             ))
-            
-        # Sort solely by ID for UI stability (avoid jumping boxes when toggling)
+
         models_info.sort(key=lambda x: x.id)
-        
-        # Add a persistence warning for Vercel/SQLite users
+
         is_ephemeral = (os.environ.get("VERCEL") or os.environ.get("ZEABUR")) and not settings.database_url
-        
+
         return {
             "models": [m.model_dump() if hasattr(m, "model_dump") else m.dict() for m in models_info],
             "persistence_warning": is_ephemeral
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch models from upstream: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"Failed to fetch models: {str(e)}")
 
 @app.post("/admin/models/alias")
 async def admin_update_model_alias(
@@ -3232,23 +3242,25 @@ async def admin_bulk_model_action(
         await db.clear_excluded_models()
         return {"status": "success", "message": "All models enabled"}
     elif request.action == "disable_all":
-        # To disable all, we first need to know what 'all' means (fetch from upstream)
-        target_url, target_key = await get_target_api_config()
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    f"{target_url}/models",
-                    headers={"Authorization": f"Bearer {target_key}"},
-                    timeout=10.0
-                )
-                response.raise_for_status()
-                upstream_models = response.json().get("data", [])
-                
-            for m in upstream_models:
-                await db.exclude_model(m["id"])
-            return {"status": "success", "message": f"Disabled {len(upstream_models)} models"}
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Failed to fetch models for bulk action: {str(e)}")
+        providers = await get_all_providers()
+        all_model_ids = set()
+        async with httpx.AsyncClient() as client:
+            for provider in providers:
+                try:
+                    response = await client.get(
+                        f"{provider['url']}/models",
+                        headers={"Authorization": f"Bearer {provider['key']}"},
+                        timeout=10.0
+                    )
+                    if response.status_code == 200:
+                        for m in response.json().get("data", []):
+                            if m.get("id"):
+                                all_model_ids.add(m["id"])
+                except Exception:
+                    continue
+        for mid in all_model_ids:
+            await db.exclude_model(mid)
+        return {"status": "success", "message": f"Disabled {len(all_model_ids)} models"}
     else:
         raise HTTPException(status_code=400, detail="Invalid action")
 
