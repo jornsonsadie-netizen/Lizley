@@ -137,6 +137,7 @@ class ConfigResponse(BaseModel):
     max_output_tokens: int = 4096
     max_keys_per_ip: int = 2
     fallback_api_keys: str = ""
+    providers: List[Dict[str, str]] = []  # [{url, key_masked}]
 
 
 class ConfigUpdateRequest(BaseModel):
@@ -146,6 +147,7 @@ class ConfigUpdateRequest(BaseModel):
     max_context: Optional[int] = None
     max_output_tokens: Optional[int] = None
     fallback_api_keys: Optional[str] = None
+    providers: Optional[List[Dict[str, str]]] = None  # [{url, key}] — replaces target_api_url/key + fallback_api_keys
 
 
 
@@ -820,38 +822,57 @@ async def get_max_output_tokens() -> int:
     return 4096
 
 
-async def get_target_api_config() -> Tuple[str, str]:
-    """Get the target API URL and key from config or database.
+def _encode_providers(providers: List[Dict[str, str]]) -> tuple[str, str, str]:
+    """Encode a list of {url, key} providers into (primary_url, primary_key, fallback_json).
     
-    Returns:
-        Tuple of (target_api_url, target_api_key).
+    Stores extra providers as JSON in fallback_api_keys so no schema change is needed.
+    Format: __providers__:<json>
     """
-    # First try database config
+    if not providers:
+        return "", "", ""
+    primary = providers[0]
+    extras = providers[1:]
+    fallback_str = f"__providers__:{json_module.dumps(extras)}" if extras else ""
+    return primary.get("url", ""), primary.get("key", ""), fallback_str
+
+
+def _decode_providers(target_url: str, target_key: str, fallback_api_keys: str) -> List[Dict[str, str]]:
+    """Decode providers list from stored config."""
+    providers = [{"url": target_url, "key": target_key}]
+    if fallback_api_keys and fallback_api_keys.startswith("__providers__:"):
+        try:
+            extras = json_module.loads(fallback_api_keys[len("__providers__:"):])
+            providers.extend(extras)
+        except Exception:
+            pass
+    elif fallback_api_keys:
+        # Legacy: plain newline-separated keys, all using the same URL
+        for k in fallback_api_keys.split('\n'):
+            k = k.strip()
+            if k:
+                providers.append({"url": target_url, "key": k})
+    return providers
+
+
+async def get_target_api_config() -> Tuple[str, str]:
+    """Get the target API URL and key from config or database."""
     config = await db.get_config()
     if config:
-        url = normalize_target_api_url(config.target_api_url)
-        # current_key_index 0 is the primary key (config.target_api_key)
-        if config.current_key_index == 0:
-            return url, config.target_api_key
-            
-        # Fallback keys (index 1+)
-        fallback_lines = [k.strip() for k in config.fallback_api_keys.split('\n') if k.strip()]
-        if not fallback_lines and ',' in config.fallback_api_keys:
-             fallback_lines = [k.strip() for k in config.fallback_api_keys.split(',') if k.strip()]
-             
-        if 1 <= config.current_key_index <= len(fallback_lines):
-            return url, fallback_lines[config.current_key_index - 1]
-            
-        return url, config.target_api_key
-    
-    # Fall back to settings
+        providers = _decode_providers(
+            normalize_target_api_url(config.target_api_url),
+            config.target_api_key,
+            config.fallback_api_keys,
+        )
+        idx = config.current_key_index
+        if 0 <= idx < len(providers):
+            p = providers[idx]
+            return normalize_target_api_url(p["url"]), p["key"]
+        return normalize_target_api_url(config.target_api_url), config.target_api_key
+
     if settings:
         return normalize_target_api_url(settings.target_api_url), settings.target_api_key
-    
-    raise HTTPException(
-        status_code=500,
-        detail="Proxy not configured"
-    )
+
+    raise HTTPException(status_code=500, detail="Proxy not configured")
 
 
 def normalize_target_api_url(target_api_url: str) -> str:
@@ -2592,14 +2613,25 @@ async def admin_get_config(
             masked_key = f"{key[:8]}...{key[-4:]}"
         else:
             masked_key = "***"
-        
+
+        providers = _decode_providers(
+            normalize_target_api_url(config.target_api_url),
+            config.target_api_key,
+            config.fallback_api_keys,
+        )
+        providers_masked = [
+            {"url": p["url"], "key_masked": (p["key"][:8] + "..." + p["key"][-4:]) if len(p["key"]) > 12 else "***"}
+            for p in providers
+        ]
+
         return ConfigResponse(
             target_api_url=normalize_target_api_url(config.target_api_url),
             target_api_key_masked=masked_key,
             max_context=config.max_context,
             max_output_tokens=config.max_output_tokens,
             max_keys_per_ip=settings.max_keys_per_ip if settings else 2,
-            fallback_api_keys=config.fallback_api_keys
+            fallback_api_keys=config.fallback_api_keys,
+            providers=providers_masked,
         )
     
     # Fall back to settings
@@ -2647,6 +2679,24 @@ async def admin_update_config(
     # Get current config
     current_config = await db.get_config()
     
+    # If providers list is supplied, it takes precedence over individual fields
+    if config_update.providers is not None:
+        providers = config_update.providers
+        if not providers:
+            raise HTTPException(status_code=400, detail="providers list cannot be empty")
+        primary_url = normalize_target_api_url(providers[0].get("url", ""))
+        primary_key = providers[0].get("key", "")
+        if not primary_url:
+            raise HTTPException(status_code=400, detail="Primary provider URL cannot be empty")
+        # Keep existing primary key if not provided
+        if not primary_key and current_config:
+            primary_key = current_config.target_api_key
+        _, _, fallback_str = _encode_providers(providers)
+        max_context = config_update.max_context if config_update.max_context is not None else (current_config.max_context if current_config else 128000)
+        max_output_tokens = config_update.max_output_tokens if config_update.max_output_tokens is not None else (current_config.max_output_tokens if current_config else 4096)
+        await db.update_config(primary_url, primary_key, max_context, max_output_tokens, fallback_str)
+        return {"message": "Configuration updated successfully"}
+
     if current_config:
         target_url = config_update.target_api_url or current_config.target_api_url
         target_key = config_update.target_api_key or current_config.target_api_key
@@ -2660,10 +2710,7 @@ async def admin_update_config(
         max_output_tokens = config_update.max_output_tokens if config_update.max_output_tokens is not None else settings.max_output_tokens
         fallback_api_keys = config_update.fallback_api_keys if config_update.fallback_api_keys is not None else ""
     else:
-        raise HTTPException(
-            status_code=500,
-            detail="Proxy not configured"
-        )
+        raise HTTPException(status_code=500, detail="Proxy not configured")
     
     normalized_target_url = normalize_target_api_url(target_url)
     if not normalized_target_url:

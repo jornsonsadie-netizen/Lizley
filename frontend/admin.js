@@ -344,12 +344,16 @@ async function loadConfig() {
         if (response.ok) {
             const data = await response.json();
 
-            // Build provider list from primary + fallback keys
-            const fallbackKeys = (data.fallback_api_keys || '').split('\n').map(k => k.trim()).filter(Boolean);
-            _providers = [
-                { url: data.target_api_url || '', key: '', keyMasked: data.target_api_key_masked || 'sk-...' },
-                ...fallbackKeys.map(k => ({ url: data.target_api_url || '', key: '', keyMasked: k.substring(0, 8) + '...' }))
-            ];
+            // Build provider list from providers array returned by backend
+            if (data.providers && data.providers.length > 0) {
+                _providers = data.providers.map(p => ({
+                    url: p.url || '',
+                    key: '',
+                    keyMasked: p.key_masked || 'sk-...',
+                }));
+            } else {
+                _providers = [{ url: data.target_api_url || '', key: '', keyMasked: data.target_api_key_masked || 'sk-...' }];
+            }
             renderProviders(_providers);
 
             maxContextInput.value = data.max_context || 128000;
@@ -369,26 +373,29 @@ async function loadConfig() {
 async function saveConfig(event) {
     event.preventDefault();
 
-    const providers = getProvidersFromDOM();
-    const primary = providers[0];
-    const fallbacks = providers.slice(1);
-
-    if (!primary.url) {
+    const domProviders = getProvidersFromDOM();
+    if (!domProviders[0]?.url) {
         showAdminStatus('Primary provider URL is required', 'error');
         return;
     }
+
+    // Merge DOM values with cached masked keys (keep existing key if field left blank)
+    const providers = domProviders.map((p, i) => {
+        const entry = { url: p.url };
+        if (p.key) entry.key = p.key;
+        // If no key entered, send empty string — backend will keep existing for primary
+        else entry.key = '';
+        return entry;
+    });
 
     const maxContext = parseInt(maxContextInput.value, 10);
     const maxOutputTokens = maxOutputTokensInput ? parseInt(maxOutputTokensInput.value, 10) : 4096;
 
     const payload = {
-        target_api_url: primary.url,
+        providers,
         max_context: maxContext,
         max_output_tokens: Math.max(1, Math.min(128000, maxOutputTokens)),
-        fallback_api_keys: fallbacks.map(p => p.key).filter(Boolean).join('\n'),
     };
-
-    if (primary.key) payload.target_api_key = primary.key;
 
     try {
         const response = await adminFetch('/admin/config', {
@@ -405,8 +412,8 @@ async function saveConfig(event) {
             logout();
         } else {
             const data = await response.json().catch(() => ({}));
-            logToConsole(`Config save failed: ${data.error || 'Unknown error'}`, 'error');
-            showAdminStatus(data.error || 'Failed to save configuration', 'error');
+            logToConsole(`Config save failed: ${data.detail || data.error || 'Unknown error'}`, 'error');
+            showAdminStatus(data.detail || data.error || 'Failed to save configuration', 'error');
         }
     } catch (error) {
         logToConsole(`Config save error: ${error.message}`, 'error');
