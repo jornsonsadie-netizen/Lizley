@@ -873,14 +873,59 @@ async def get_all_providers() -> List[Dict[str, str]]:
     return []
 
 
-async def get_target_api_config() -> Tuple[str, str]:
-    """Get the target API URL and key — picks randomly across all active providers."""
+# Cache: model_id -> {url, key}  — rebuilt whenever providers change
+_model_provider_cache: Dict[str, Dict[str, str]] = {}
+_model_provider_cache_ts: float = 0.0
+_MODEL_CACHE_TTL = 120.0  # seconds
+
+
+async def _get_model_provider_map() -> Dict[str, Dict[str, str]]:
+    """Return a mapping of model_id -> provider, refreshed every 2 minutes."""
+    global _model_provider_cache, _model_provider_cache_ts
+    now = time.time()
+    if now - _model_provider_cache_ts < _MODEL_CACHE_TTL and _model_provider_cache:
+        return _model_provider_cache
+
     providers = await get_all_providers()
-    if providers:
-        import random
-        p = random.choice(providers)
-        return p["url"], p["key"]
-    raise HTTPException(status_code=500, detail="Proxy not configured")
+    mapping: Dict[str, Dict[str, str]] = {}
+    for provider in providers:
+        try:
+            resp = await http_client.get(
+                f"{provider['url']}/models",
+                headers={"Authorization": f"Bearer {provider['key']}"},
+                timeout=10.0,
+            )
+            if resp.status_code == 200:
+                for m in resp.json().get("data", []):
+                    mid = m.get("id")
+                    if mid and mid not in mapping:
+                        mapping[mid] = provider
+        except Exception as e:
+            print(f"[ProviderMap] Error fetching models from {provider['url']}: {e}")
+
+    if mapping:
+        _model_provider_cache = mapping
+        _model_provider_cache_ts = now
+    return _model_provider_cache
+
+
+async def get_target_api_config(model: str = "") -> Tuple[str, str]:
+    """Return the (url, key) for the provider that serves the requested model.
+    
+    Falls back to the first provider if model is unknown.
+    """
+    providers = await get_all_providers()
+    if not providers:
+        raise HTTPException(status_code=500, detail="Proxy not configured")
+
+    if model:
+        mapping = await _get_model_provider_map()
+        if model in mapping:
+            p = mapping[model]
+            return p["url"], p["key"]
+
+    # Fallback: use primary provider
+    return providers[0]["url"], providers[0]["key"]
 
 
 def normalize_target_api_url(target_api_url: str) -> str:
@@ -1752,8 +1797,8 @@ async def _proxy_chat_completions_impl(
         # Proactively increment RPM to prevent rapid-fire abuse
         await db.increment_rpm_only(key_record.id)
         
-        # Get target API config
-        target_url, target_key = await get_target_api_config()
+        # Get target API config — route to the provider that serves this model
+        target_url, target_key = await get_target_api_config(model=chat_request.model)
         
         # Prepare request body
         request_body = chat_request.model_dump(exclude_none=True)
@@ -1814,7 +1859,7 @@ async def _proxy_chat_completions_impl(
                 # Simplest is to recursive call once with a flag, or just re-run the handler call here.
                 # Let's re-get config and call the handler again.
                 try:
-                    target_url, target_key = await get_target_api_config()
+                    target_url, target_key = await get_target_api_config(model=chat_request.model)
                     if chat_request.stream:
                         if "wenwen-ai.com" in target_url:
                             return await _handle_emulated_streaming_request(target_url, target_key, request_body, key_record, token_count, client_ip)
@@ -2682,6 +2727,10 @@ async def admin_update_config(
         max_context = config_update.max_context if config_update.max_context is not None else (current_config.max_context if current_config else 128000)
         max_output_tokens = config_update.max_output_tokens if config_update.max_output_tokens is not None else (current_config.max_output_tokens if current_config else 4096)
         await db.update_config(primary_url, primary_key, max_context, max_output_tokens, fallback_str)
+        # Invalidate model-provider cache so new providers are picked up immediately
+        global _model_provider_cache, _model_provider_cache_ts
+        _model_provider_cache = {}
+        _model_provider_cache_ts = 0.0
         return {"message": "Configuration updated successfully"}
 
     if current_config:
