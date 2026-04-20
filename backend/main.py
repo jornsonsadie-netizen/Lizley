@@ -825,28 +825,32 @@ async def get_max_output_tokens() -> int:
 def _encode_providers(providers: List[Dict[str, str]]) -> tuple[str, str, str]:
     """Encode a list of {url, key} providers into (primary_url, primary_key, fallback_json).
     
-    Stores extra providers as JSON in fallback_api_keys so no schema change is needed.
+    Stores all providers as JSON in fallback_api_keys field.
     Format: __providers__:<json>
     """
     if not providers:
         return "", "", ""
     primary = providers[0]
-    extras = providers[1:]
-    fallback_str = f"__providers__:{json_module.dumps(extras)}" if extras else ""
+    # Store ALL providers (including primary) in the JSON so URLs are preserved
+    fallback_str = f"__providers__:{json_module.dumps(providers)}"
     return primary.get("url", ""), primary.get("key", ""), fallback_str
 
 
 def _decode_providers(target_url: str, target_key: str, fallback_api_keys: str) -> List[Dict[str, str]]:
     """Decode providers list from stored config."""
-    providers = [{"url": target_url, "key": target_key}]
     if fallback_api_keys and fallback_api_keys.startswith("__providers__:"):
         try:
-            extras = json_module.loads(fallback_api_keys[len("__providers__:"):])
-            providers.extend(extras)
+            providers = json_module.loads(fallback_api_keys[len("__providers__:"):])
+            # Normalise URLs
+            for p in providers:
+                if p.get("url"):
+                    p["url"] = normalize_target_api_url(p["url"])
+            return providers
         except Exception:
             pass
-    elif fallback_api_keys:
-        # Legacy: plain newline-separated keys, all using the same URL
+    # Legacy: plain newline-separated keys, all using the same URL
+    providers = [{"url": target_url, "key": target_key}]
+    if fallback_api_keys:
         for k in fallback_api_keys.split('\n'):
             k = k.strip()
             if k:
@@ -855,7 +859,10 @@ def _decode_providers(target_url: str, target_key: str, fallback_api_keys: str) 
 
 
 async def get_target_api_config() -> Tuple[str, str]:
-    """Get the target API URL and key from config or database."""
+    """Get the target API URL and key from config or database.
+    
+    With multiple providers configured, picks one randomly to distribute load.
+    """
     config = await db.get_config()
     if config:
         providers = _decode_providers(
@@ -863,9 +870,11 @@ async def get_target_api_config() -> Tuple[str, str]:
             config.target_api_key,
             config.fallback_api_keys,
         )
-        idx = config.current_key_index
-        if 0 <= idx < len(providers):
-            p = providers[idx]
+        # Filter to providers that have both a URL and key
+        active = [p for p in providers if p.get("url") and p.get("key")]
+        if active:
+            import random
+            p = random.choice(active)
             return normalize_target_api_url(p["url"]), p["key"]
         return normalize_target_api_url(config.target_api_url), config.target_api_key
 
@@ -2685,12 +2694,21 @@ async def admin_update_config(
         if not providers:
             raise HTTPException(status_code=400, detail="providers list cannot be empty")
         primary_url = normalize_target_api_url(providers[0].get("url", ""))
-        primary_key = providers[0].get("key", "")
         if not primary_url:
             raise HTTPException(status_code=400, detail="Primary provider URL cannot be empty")
-        # Keep existing primary key if not provided
-        if not primary_key and current_config:
-            primary_key = current_config.target_api_key
+
+        # For any provider with a blank key, keep the existing stored key
+        if current_config:
+            existing = _decode_providers(
+                normalize_target_api_url(current_config.target_api_url),
+                current_config.target_api_key,
+                current_config.fallback_api_keys,
+            )
+            for i, p in enumerate(providers):
+                if not p.get("key") and i < len(existing):
+                    p["key"] = existing[i].get("key", "")
+
+        primary_key = providers[0].get("key", "")
         _, _, fallback_str = _encode_providers(providers)
         max_context = config_update.max_context if config_update.max_context is not None else (current_config.max_context if current_config else 128000)
         max_output_tokens = config_update.max_output_tokens if config_update.max_output_tokens is not None else (current_config.max_output_tokens if current_config else 4096)
