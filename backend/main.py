@@ -575,7 +575,9 @@ async def is_vpn_or_proxy(ip: str) -> bool:
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get("status") == "success":
-                    is_vpn = data.get("proxy", False) or data.get("hosting", False)
+                    # Only block if explicitly flagged as a proxy/VPN
+                    # 'hosting: true' is often a false positive for legitimate residential/school/office networks
+                    is_vpn = data.get("proxy", False)
                     VPN_CACHE[ip] = is_vpn
                     return is_vpn
     except Exception as e:
@@ -729,7 +731,7 @@ async def validate_api_key(
         print(f"[Auth] IP Lock Violation: Key {key_record.key_prefix} (Owner {key_record.discord_id}) accessed from {client_ip} (Original: {key_record.ip_address})")
         raise HTTPException(
             status_code=403,
-            detail="Why are you using a VPN? Turn it off."
+            detail="IP address mismatch detected. Please refresh the page to update your session or use your original network."
         )
         
     # 2. Proactive VPN Check (for the current IP, even if it matches or is newly assigned)
