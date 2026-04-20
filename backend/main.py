@@ -2665,7 +2665,7 @@ async def admin_update_config(
         if not primary_url:
             raise HTTPException(status_code=400, detail="Primary provider URL cannot be empty")
 
-        # For any provider with a blank key, keep the existing stored key
+        # For any provider without a key, keep the existing stored key
         if current_config:
             existing = _decode_providers(
                 normalize_target_api_url(current_config.target_api_url),
@@ -2673,8 +2673,9 @@ async def admin_update_config(
                 current_config.fallback_api_keys,
             )
             for i, p in enumerate(providers):
-                if not p.get("key") and i < len(existing):
-                    p["key"] = existing[i].get("key", "")
+                if not p.get("key"):
+                    if i < len(existing) and existing[i].get("key"):
+                        p["key"] = existing[i]["key"]
 
         primary_key = providers[0].get("key", "")
         _, _, fallback_str = _encode_providers(providers)

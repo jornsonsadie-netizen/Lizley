@@ -344,15 +344,14 @@ async function loadConfig() {
         if (response.ok) {
             const data = await response.json();
 
-            // Build provider list from providers array returned by backend
             if (data.providers && data.providers.length > 0) {
                 _providers = data.providers.map(p => ({
                     url: p.url || '',
                     key: '',
-                    keyMasked: p.key_masked || 'sk-...',
+                    keyMasked: p.key_masked || 'unchanged',
                 }));
             } else {
-                _providers = [{ url: data.target_api_url || '', key: '', keyMasked: data.target_api_key_masked || 'sk-...' }];
+                _providers = [{ url: data.target_api_url || '', key: '', keyMasked: data.target_api_key_masked || 'unchanged' }];
             }
             renderProviders(_providers);
 
@@ -379,12 +378,11 @@ async function saveConfig(event) {
         return;
     }
 
-    // Merge DOM values with cached masked keys (keep existing key if field left blank)
+    // Only send key if user actually typed one — blank means "keep existing"
     const providers = domProviders.map((p, i) => {
         const entry = { url: p.url };
-        if (p.key) entry.key = p.key;
-        // If no key entered, send empty string — backend will keep existing for primary
-        else entry.key = '';
+        if (p.key.trim()) entry.key = p.key.trim();
+        // else omit key — backend will preserve existing
         return entry;
     });
 
