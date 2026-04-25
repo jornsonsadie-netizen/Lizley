@@ -935,9 +935,8 @@ def normalize_target_api_url(target_api_url: str) -> str:
     if url.endswith("/chat/completions"):
         url = url[:-17]
         
-    if url.endswith("/v1"):
-        return url
-    return f"{url}/v1"
+    # Removed: Automatic /v1 appending. The user should provide the full base URL.
+    return url
 
 
 async def verify_admin_password(
