@@ -3222,7 +3222,7 @@ async def admin_get_models(
 
         models_info.sort(key=lambda x: x.id)
 
-        is_ephemeral = (os.environ.get("VERCEL") or os.environ.get("ZEABUR")) and not settings.database_url
+        is_ephemeral = bool((os.environ.get("VERCEL") or os.environ.get("ZEABUR")) and not (settings and settings.database_url))
 
         return {
             "models": [m.model_dump() if hasattr(m, "model_dump") else m.dict() for m in models_info],
