@@ -232,30 +232,38 @@ async def maybe_curate_context(
 
 
 # ---------------------------------------------------------------------------
-# CSAM / underage character detector
+# CSAM detector — uses OpenAI omni-moderation
 # ---------------------------------------------------------------------------
 
-CSAM_SYSTEM_PROMPT = (
-    "You are a content safety classifier. Your ONLY job is to detect if the user's "
-    "message contains roleplay or fictional content involving underage characters in "
-    "sexual, romantic, or otherwise inappropriate situations.\n\n"
-    "Respond with EXACTLY one word:\n"
-    "- UNSAFE  — if underage characters are involved in any sexual/romantic/inappropriate context\n"
-    "- SAFE    — if no such content is detected\n\n"
-    "Do not explain. Do not add punctuation. Output only UNSAFE or SAFE."
-)
+# CSAM categories flagged by omni-moderation that we block.
+# Everything else (adult content between adults, etc.) is allowed.
+_CSAM_CATEGORIES = {
+    "sexual/minors",
+    "sexual/minors/grooming",
+}
 
 
 async def is_csam(
     messages: list[dict[str, Any]],
     client: Optional[httpx.AsyncClient] = None,
 ) -> bool:
-    """Return True if the latest user message contains underage roleplay content.
+    """Return True if the latest user message contains CSAM / underage sexual content.
 
-    Uses the same cheap NVIDIA models as context curation.
-    Returns False (safe) on any error so legitimate requests are never blocked by infra issues.
+    Uses the OpenAI omni-moderation-latest model.
+    Requires OPENAI_API_KEY in the environment.
+    Returns False (safe) on any error so legitimate requests are never blocked by
+    infrastructure issues.
+
+    Adult content between adults is NOT blocked — only content that involves minors.
     """
-    # Extract the last user message for inspection
+    import os
+
+    openai_key = os.getenv("OPENAI_API_KEY", "")
+    if not openai_key:
+        logger.warning("[CSAM] OPENAI_API_KEY not set — skipping moderation check")
+        return False
+
+    # Extract the last user message
     last_user = ""
     for m in reversed(messages):
         if m.get("role") == "user":
@@ -271,22 +279,39 @@ async def is_csam(
     if not last_user.strip():
         return False
 
-    check_messages = [
-        {"role": "system", "content": CSAM_SYSTEM_PROMPT},
-        {"role": "user",   "content": last_user[:4000]},  # cap to avoid wasting tokens
-    ]
-
     own_client = client is None
     if own_client:
         client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0))
 
     try:
-        result, model_used = await _call_nvidia(check_messages, client)
-        verdict = result.strip().upper().split()[0] if result.strip() else "SAFE"
-        logger.info("[CSAM] Verdict: %s (model: %s)", verdict, model_used)
-        return verdict == "UNSAFE"
+        resp = await client.post(
+            "https://api.openai.com/v1/moderations",
+            headers={
+                "Authorization": f"Bearer {openai_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "omni-moderation-latest",
+                "input": last_user[:4000],
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        result = data.get("results", [{}])[0]
+        categories: dict = result.get("categories", {})
+
+        # Block only if any CSAM category is flagged
+        for cat in _CSAM_CATEGORIES:
+            if categories.get(cat, False):
+                logger.warning("[CSAM] Blocked — category flagged: %s", cat)
+                return True
+
+        logger.info("[CSAM] Clean (omni-moderation)")
+        return False
+
     except Exception as exc:
-        logger.error("[CSAM] Detection failed: %s — defaulting to SAFE", exc)
+        logger.error("[CSAM] omni-moderation check failed: %s — defaulting to SAFE", exc)
         return False
     finally:
         if own_client:
