@@ -893,13 +893,18 @@ async def _get_model_provider_map() -> Dict[str, Dict[str, str]]:
                 timeout=10.0,
             )
             if resp.status_code == 200:
-                for m in resp.json().get("data", []):
+                models = resp.json().get("data", [])
+                for m in models:
                     mid = m.get("id")
                     if mid and mid not in mapping:
                         mapping[mid] = provider
+                print(f"[ProviderMap] {provider['url']} -> {len(models)} models")
+            else:
+                print(f"[ProviderMap] {provider['url']} returned {resp.status_code}")
         except Exception as e:
-            print(f"[ProviderMap] Error fetching models from {provider['url']}: {e}")
+            print(f"[ProviderMap] Error fetching from {provider['url']}: {e}")
 
+    print(f"[ProviderMap] Total models mapped: {len(mapping)} across {len(providers)} providers")
     if mapping:
         _model_provider_cache = mapping
         _model_provider_cache_ts = now
@@ -909,13 +914,20 @@ async def _get_model_provider_map() -> Dict[str, Dict[str, str]]:
 async def get_target_api_config(model: str = "") -> Tuple[str, str]:
     """Return the (url, key) for the provider that serves the requested model.
     
-    Falls back to the first provider if model is unknown.
+    Checks the model-provider map. If model not found, returns primary provider.
     """
     providers = await get_all_providers()
     if not providers:
         raise HTTPException(status_code=500, detail="Proxy not configured")
 
     if model:
+        mapping = await _get_model_provider_map()
+        if model in mapping:
+            p = mapping[model]
+            return p["url"], p["key"]
+        # Model not in cache yet — try rebuilding cache once by force
+        global _model_provider_cache_ts
+        _model_provider_cache_ts = 0.0
         mapping = await _get_model_provider_map()
         if model in mapping:
             p = mapping[model]
@@ -1109,6 +1121,13 @@ async def lifespan(app: FastAPI):
     # Start periodic health check task
     health_check_task = asyncio.create_task(periodic_health_check())
     print("* Started periodic health check (every 10 minutes)")
+
+    # Warm the model-provider cache so routing works immediately on first request
+    try:
+        await _get_model_provider_map()
+        print(f"* Model-provider cache warmed: {len(_model_provider_cache)} models mapped")
+    except Exception as e:
+        print(f"* Model-provider cache warm failed (will retry on first request): {e}")
     
     # Populate the initial BANNED_IPS_CACHE from database
     try:
@@ -3154,23 +3173,38 @@ async def admin_get_models(
         raise HTTPException(status_code=502, detail="No providers configured")
 
     all_models: Dict[str, dict] = {}
+    fetch_errors: list[str] = []
     try:
         async with httpx.AsyncClient() as client:
             for provider in providers:
                 try:
+                    models_url = f"{provider['url']}/models"
+                    print(f"[AdminModels] Fetching {models_url}")
                     response = await client.get(
-                        f"{provider['url']}/models",
+                        models_url,
                         headers={"Authorization": f"Bearer {provider['key']}"},
-                        timeout=10.0
+                        timeout=15.0
                     )
+                    print(f"[AdminModels] Response {response.status_code} from {models_url}")
                     if response.status_code == 200:
-                        for m in response.json().get("data", []):
+                        data = response.json()
+                        items = data.get("data", data.get("models", []))
+                        for m in items:
                             mid = m.get("id")
                             if mid and mid not in all_models:
                                 all_models[mid] = m
+                    else:
+                        err = f"{provider['url']} returned {response.status_code}: {response.text[:200]}"
+                        print(f"[AdminModels] {err}")
+                        fetch_errors.append(err)
                 except Exception as e:
-                    print(f"[AdminModels] Error fetching from {provider['url']}: {e}")
+                    err = f"{provider['url']} error: {e}"
+                    print(f"[AdminModels] {err}")
+                    fetch_errors.append(err)
                     continue
+
+        if not all_models and fetch_errors:
+            raise HTTPException(status_code=502, detail=f"Failed to fetch models: {'; '.join(fetch_errors)}")
 
         excluded = await db.get_excluded_models()
         aliases = await db.get_model_aliases()
