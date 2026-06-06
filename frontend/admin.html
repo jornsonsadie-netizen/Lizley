@@ -143,23 +143,6 @@
         </section>
 
 
-        <!-- Customer Key Enabler Section -->
-        <section class="admin-section card enabler-sanctuary">
-            <div class="section-header">
-                <h2>✧ Customer Key Enabler ✧</h2>
-            </div>
-            <p class="form-hint" style="margin-bottom: var(--space-sm);">
-                Paste a customer's full API key (starting with <code>sk-</code>) to manually enable and whitelist it.
-            </p>
-            <form id="enabler-form" class="inline-form" onsubmit="enableKeyByFull(event)">
-                <div class="form-group inline" style="flex: 1;">
-                    <input type="password" id="enabler-key-input" name="full_key" placeholder="Paste full sk- key here..." required autocomplete="off">
-                </div>
-                <button type="submit" class="btn btn-primary">Enable & Whitelist</button>
-            </form>
-            <div id="enabler-status" class="status-message hidden" style="margin-top: var(--space-sm);"></div>
-        </section>
-
         <!-- Configuration Section -->
         <section class="admin-section card">
             <div class="section-header">
@@ -288,7 +271,7 @@
                             <th>Status</th>
                             <th>IP Bypass</th>
                             <th>RPM</th>
-                            <th>Tokens/day</th>
+                            <th>Req/day</th>
                             <th>Actions</th>
                         </tr>
                     </thead>

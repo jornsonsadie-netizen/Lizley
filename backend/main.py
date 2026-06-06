@@ -31,7 +31,7 @@ import re
 from backend.config import load_settings, Settings
 from backend.database import Database, ApiKeyRecord, create_database, ContentFlagRecord, BannedIpRecord, BannedUserRecord
 from backend.session_secret import get_or_create_session_secret
-from backend.context_curator import maybe_curate_context, is_csam, _estimate_tokens as _cc_estimate_tokens
+from backend.context_curator import is_csam
 
 
 # ==================== Early .env Loading ====================
@@ -1765,14 +1765,6 @@ async def _proxy_chat_completions_impl(
                 detail=f"Request exceeds maximum context limit of {max_context} tokens"
             )
         
-        # ---- Context Curation ----
-        _raw_msgs = [m.model_dump() for m in chat_request.messages]
-        _curated  = await maybe_curate_context(_raw_msgs, http_client)
-        if _curated is not _raw_msgs:
-            token_count = _cc_estimate_tokens(_curated)
-            chat_request.messages = [ChatMessage(**m) for m in _curated]
-        # --------------------------
-
         # ---- CSAM Detection ----
         _msgs_for_check = [m.model_dump() for m in chat_request.messages]
         if await is_csam(_msgs_for_check, http_client):

@@ -665,7 +665,7 @@ function displayKeys(keys) {
                 </div>
             </td>
             <td>${key.current_rpm}/10</td>
-            <td title="Tokens today / 150K limit">${key.tokens_used_today != null ? key.tokens_used_today.toLocaleString() : key.current_rpd}/${(150000).toLocaleString()}</td>
+            <td title="Requests today (Claude: 100/day, Others: 700/day)">${key.current_rpd} req today</td>
             <td>
                 <div class="action-buttons" onclick="event.stopPropagation()">
                     <button onclick="toggleKey(${key.id}, ${key.enabled})"
